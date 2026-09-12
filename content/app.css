@@ -1,0 +1,1868 @@
+.aap-overlay {
+  --aap-overlay-surface: var(--aap-page-background, var(--color-neutral-background, #ffffff));
+  --aap-overlay-text: var(--aap-page-text, var(--color-neutral-text, #374151));
+  --aap-overlay-muted: var(--aap-page-muted, var(--color-neutral-text-subtle, #4b5563));
+  --aap-overlay-grid: var(--aap-page-grid, var(--color-neutral-separator-subtle, rgba(17, 24, 39, 0.14)));
+  position: absolute;
+  inset: 0;
+  background: transparent;
+}
+
+/* Once the replacement has drawn successfully, hide only Apify's canvas.
+   During loading/errors the native chart remains visible as a fallback. */
+.aap-overlay-page.aap-overlay-ready:not(.aap-overlay-native-visible):not(.aap-range-mode):not(.aap-monetization-original-mode) [class*="PaidActorProfitMarginChart"] canvas:not(.aap-chart):not(.aap-range-chart) {
+  visibility: hidden !important;
+}
+
+.aap-chart {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: crosshair;
+}
+
+.aap-toolbar-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 0;
+  margin-bottom: 4px;
+  border-top: 1px solid var(--aap-overlay-grid);
+  border-bottom: 1px solid var(--aap-overlay-grid);
+}
+
+.aap-status {
+  font-size: 11px;
+  color: var(--aap-overlay-muted);
+  margin-left: auto;
+}
+
+.aap-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--aap-overlay-text);
+  cursor: pointer;
+}
+
+.aap-metric-select {
+  height: 28px;
+  min-width: 104px;
+  box-sizing: border-box;
+  padding: 4px 24px 4px 8px;
+  border: 1px solid var(--aap-page-border, rgba(17, 24, 39, 0.2));
+  border-radius: 5px;
+  color: var(--aap-page-text, #374151);
+  background: var(--aap-page-background, #ffffff);
+  font: inherit;
+  line-height: 18px;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.aap-metric-control {
+  position: relative;
+}
+
+.aap-metric-control::after {
+  content: "";
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  border-right: 1px solid currentColor;
+  border-bottom: 1px solid currentColor;
+  pointer-events: none;
+  transform: translateY(-65%) rotate(45deg);
+}
+
+.aap-metric-select:focus-visible {
+  border-color: #12966f;
+  outline: 2px solid rgba(18, 150, 111, 0.2);
+  outline-offset: 1px;
+}
+
+.aap-toggle-checkbox {
+  margin: 0;
+  cursor: pointer;
+  accent-color: #2dd4bf;
+}
+
+.aap-tooltip {
+  position: fixed;
+  z-index: 9999;
+  /* Off by default — this is just a hover preview that follows the mouse,
+     and a click target under the cursor would only get in its own way.
+     app.js flips this to auto (via .aap-tt-pinned) once the tooltip is
+     pinned in place by clicking a bar, which is when the sort headers and
+     close button need to actually receive clicks. */
+  pointer-events: none;
+  background: #16181d;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-family: inherit;
+  color: #e5e7eb;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  min-width: 200px;
+}
+
+.aap-tooltip.aap-tt-pinned {
+  pointer-events: auto;
+  border-color: rgba(45, 212, 191, 0.5);
+}
+
+.aap-tt-pin-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  color: #9ca3af;
+  margin-bottom: 6px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.aap-tt-close {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: #9ca3af;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+  cursor: pointer;
+}
+
+.aap-tt-close:hover {
+  color: #e5e7eb;
+}
+
+.aap-tt-header {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  margin-bottom: 2px;
+}
+
+.aap-tt-header-label {
+  flex: 1;
+}
+
+.aap-tt-header-value {
+  font-size: 15px;
+}
+
+.aap-tt-date {
+  font-size: 11px;
+  color: #9ca3af;
+  margin-bottom: 8px;
+}
+
+.aap-tt-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px 12px;
+  font-size: 11px;
+  color: #9ca3af;
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.aap-tt-stats b {
+  color: #e5e7eb;
+  font-weight: 600;
+}
+
+.aap-tt-subtitle {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #6b7280;
+  margin-bottom: 4px;
+}
+
+.aap-tt-note {
+  font-size: 12px;
+  color: #9ca3af;
+}
+
+.aap-tt-table {
+  border-collapse: collapse;
+  font-size: 12px;
+  width: 100%;
+}
+
+.aap-tt-table th,
+.aap-tt-table td {
+  padding: 2px 0;
+  white-space: nowrap;
+}
+
+.aap-tt-table th {
+  font-size: 10px;
+  font-weight: 500;
+  color: #6b7280;
+  text-align: right;
+  padding-left: 12px;
+  user-select: none;
+}
+
+/* Only a pinned tooltip has pointer-events, so only style the headers as
+   clickable there — on the plain hover preview the cursor can't reach them
+   anyway, and a pointer cursor would falsely promise a click will work. */
+.aap-tt-pinned .aap-tt-table th {
+  cursor: pointer;
+}
+
+.aap-tt-pinned .aap-tt-table th:hover {
+  color: #e5e7eb;
+}
+
+.aap-tt-table th.aap-tt-sorted {
+  color: #e5e7eb;
+}
+
+.aap-tt-sort-arrow {
+  font-size: 8px;
+  margin-left: 2px;
+}
+
+.aap-tt-table td:first-child,
+.aap-tt-table th:first-child {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.aap-tt-table td:not(:first-child) {
+  text-align: right;
+  padding-left: 12px;
+}
+
+.aap-tt-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+}
+
+/* ---- Custom date range mode -------------------------------------------- */
+.aap-range-selector {
+  --aap-range-surface: var(--aap-page-background, var(--color-neutral-background, #ffffff));
+  --aap-range-surface-muted: var(--aap-page-background-muted, var(--color-neutral-background-muted, #f3f4f6));
+  --aap-range-text: var(--aap-page-text, var(--color-neutral-text, #111827));
+  --aap-range-muted: var(--aap-page-muted, var(--color-neutral-text-subtle, #4b5563));
+  --aap-range-border: var(--aap-page-border, var(--color-neutral-border, #9ca3af));
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: 8px;
+  color: var(--aap-range-text);
+  color-scheme: inherit;
+  font-size: 12px;
+  line-height: 20px;
+  white-space: nowrap;
+  z-index: 20;
+}
+
+.aap-view-toggle {
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  box-sizing: border-box;
+  padding: 2px;
+  border: 1px solid var(--aap-range-border);
+  border-radius: 6px;
+  background: var(--aap-range-surface-muted);
+}
+
+.aap-view-button {
+  height: 28px;
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 4px;
+  color: var(--aap-range-muted);
+  background: transparent;
+  font: inherit;
+  line-height: 20px;
+  cursor: pointer;
+}
+
+.aap-view-button:hover,
+.aap-view-button:focus-visible {
+  color: var(--aap-range-text);
+  outline: none;
+}
+
+.aap-view-button-active {
+  color: var(--aap-range-text);
+  background: var(--aap-range-surface);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+}
+
+.aap-range-custom-controls {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 32px;
+}
+
+.aap-range-custom-controls[hidden] {
+  display: none;
+}
+
+.aap-range-fields {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+}
+
+.aap-range-field,
+.aap-range-grouping {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 32px;
+  /* Native select controls sit a few pixels above the neighboring buttons in
+     Apify's header flex row. Keep the labels and their boxes on the same
+     visual center as the toggle and quick ranges. */
+  position: relative;
+  top: 3px;
+  color: var(--aap-range-muted);
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.aap-range-field-label {
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  white-space: nowrap;
+}
+
+.aap-range-select-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.aap-range-select-wrap::after {
+  content: "";
+  position: absolute;
+  right: 9px;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  border-right: 1px solid var(--aap-range-text);
+  border-bottom: 1px solid var(--aap-range-text);
+  pointer-events: none;
+  transform: translateY(-65%) rotate(45deg);
+}
+
+.aap-range-field select,
+.aap-range-grouping select {
+  width: 116px;
+  height: 32px;
+  min-height: 32px;
+  padding: 5px 28px 5px 8px;
+  box-sizing: border-box;
+  border: 1px solid var(--aap-range-border);
+  border-radius: 5px;
+  color: var(--aap-range-text);
+  background: var(--aap-range-surface);
+  font: inherit;
+  line-height: 20px;
+  color-scheme: inherit;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.aap-range-grouping select {
+  width: 136px;
+}
+
+.aap-range-field select:focus-visible,
+.aap-range-grouping select:focus-visible,
+.aap-range-quick-button:focus-visible {
+  border-color: #12966f;
+  outline: 2px solid rgba(18, 150, 111, 0.2);
+  outline-offset: 1px;
+}
+
+.aap-range-quick-ranges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+}
+
+.aap-range-quick-button {
+  min-width: 42px;
+  height: 32px;
+  padding: 5px 8px;
+  box-sizing: border-box;
+  border: 1px solid var(--aap-range-border);
+  border-radius: 5px;
+  color: var(--aap-range-text);
+  background: var(--aap-range-surface-muted);
+  font: inherit;
+  line-height: 20px;
+  cursor: pointer;
+}
+
+.aap-range-quick-button:hover,
+.aap-range-quick-button-active {
+  color: var(--aap-range-text);
+  border-color: #12966f;
+  background: var(--aap-range-surface);
+}
+
+.aap-range-input-error {
+  font-size: 11px;
+  color: #b42318;
+}
+
+.aap-range-input-error[hidden] {
+  display: none;
+}
+
+.aap-range-status {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 0;
+  min-height: 20px;
+  box-sizing: border-box;
+  color: var(--aap-range-muted);
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.aap-range-status:empty {
+  display: none;
+}
+
+/* The old extension chart and toolbar are useful in month mode. In range
+   mode the five native chart canvases are replaced by the range canvases, so
+   there is only one set of controls and one source of truth. */
+.aap-range-mode .aap-toolbar-row,
+.aap-range-mode .aap-overlay {
+  display: none !important;
+}
+
+/* Original mode is a real fallback to Apify's page, rather than another
+   extension chart. The class also beats the month chart's inline canvas
+   visibility while the app renderer is finishing its next poll. */
+.aap-monetization-original-mode .aap-toolbar-row,
+.aap-monetization-original-mode .aap-overlay {
+  display: none !important;
+}
+
+.aap-monetization-original-mode [class*="PaidActorProfitMarginChart"] canvas:not(.aap-chart):not(.aap-range-chart) {
+  visibility: visible !important;
+}
+
+/* Custom mode represents the whole account. Keep Apify's actor, tier, and
+   month selectors available in Original mode, but remove controls that do
+   not apply to the custom range request. */
+.aap-range-mode #analytics-actor-select,
+.aap-range-mode [data-test="select-using-cycle"] {
+  display: none !important;
+}
+
+/* The tier filter and export action share the second native header section.
+   Hide that whole section in Custom mode so the only visible controls are the
+   range controls above; Original mode leaves the entire native header intact. */
+.aap-range-mode [class*="StyledAnalyticsSection"]:has(#analytics-tiers-select) {
+  display: none !important;
+}
+
+.aap-range-chart-overlay {
+  --aap-range-chart-surface: var(--aap-page-background, var(--color-neutral-background, #ffffff));
+  --aap-range-chart-text: var(--aap-page-text, var(--color-neutral-text, #374151));
+  --aap-range-chart-grid: var(--aap-page-grid, var(--color-neutral-separator-subtle, rgba(17, 24, 39, 0.14)));
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  background: transparent;
+  visibility: hidden;
+}
+
+.aap-range-chart {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.aap-range-legend {
+  position: absolute;
+  top: 9px;
+  left: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  color: var(--aap-range-chart-text);
+  font-size: 11px;
+  pointer-events: none;
+}
+
+.aap-range-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.aap-range-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 8px;
+}
+
+.aap-range-tooltip {
+  position: fixed;
+  z-index: 10000;
+  display: none;
+  box-sizing: border-box;
+  max-width: min(520px, calc(100vw - 16px));
+  padding: 7px 9px;
+  border: 1px solid var(--aap-page-border, var(--color-neutral-border, rgba(255, 255, 255, 0.15)));
+  border-radius: 6px;
+  color: var(--aap-page-text, var(--color-neutral-text, #f3f4f6));
+  background: var(--aap-page-background, var(--color-neutral-background, #16181d));
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  font-size: 11px;
+  pointer-events: none;
+  white-space: normal;
+}
+
+.aap-range-tooltip-period {
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+
+.aap-range-tooltip-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 180px;
+  line-height: 1.5;
+}
+
+.aap-range-tooltip-row .aap-range-dot {
+  flex: 0 0 8px;
+}
+
+.aap-range-tooltip-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.aap-range-tooltip-value {
+  flex: 0 0 auto;
+  font-weight: 600;
+}
+
+/* ---- Account-wide Actor quality overview ------------------------------ */
+.aap-quality-overview-page [data-test="common-empty-state"] {
+  display: none !important;
+}
+
+.aap-quality-overview {
+  --aap-quality-surface: var(--color-neutral-background, #ffffff);
+  --aap-quality-surface-muted: var(--color-neutral-background-muted, rgba(0, 0, 0, 0.05));
+  --aap-quality-text: var(--color-neutral-text, #111827);
+  --aap-quality-muted: var(--color-neutral-text-subtle, #4b5563);
+  --aap-quality-border: var(--color-neutral-border, rgba(0, 0, 0, 0.18));
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 8px;
+  color: var(--aap-quality-text);
+  font-size: 13px;
+}
+
+.aap-quality-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.aap-quality-header h2 {
+  margin: 0;
+  color: var(--aap-quality-text);
+  font-size: 18px;
+  line-height: 24px;
+}
+
+.aap-quality-header p {
+  margin: 4px 0 0;
+  color: var(--aap-quality-muted);
+  line-height: 20px;
+}
+
+.aap-quality-summary {
+  flex: 0 0 auto;
+  color: var(--aap-quality-muted);
+  font-variant-numeric: tabular-nums;
+  line-height: 24px;
+}
+
+.aap-quality-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.aap-quality-controls input,
+.aap-quality-controls select,
+.aap-quality-order,
+.aap-quality-refresh {
+  height: 34px;
+  min-height: 34px;
+  box-sizing: border-box;
+  border: 1px solid var(--aap-quality-border);
+  border-radius: 5px;
+  color: var(--aap-quality-text);
+  background: var(--aap-quality-surface);
+  font: inherit;
+  line-height: 20px;
+}
+
+.aap-quality-controls input {
+  width: min(300px, 100%);
+  padding: 6px 9px;
+}
+
+.aap-quality-controls select {
+  min-width: 142px;
+  padding: 6px 28px 6px 9px;
+}
+
+.aap-quality-suggestion-filter {
+  min-width: 160px !important;
+}
+
+.aap-quality-order,
+.aap-quality-refresh {
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+.aap-quality-controls input:focus-visible,
+.aap-quality-controls select:focus-visible,
+.aap-quality-order:focus-visible,
+.aap-quality-refresh:focus-visible,
+.aap-quality-order:hover,
+.aap-quality-refresh:hover {
+  border-color: #12966f;
+  outline: none;
+}
+
+.aap-quality-status {
+  min-height: 20px;
+  margin-bottom: 8px;
+  color: var(--aap-quality-muted);
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.aap-quality-original-mode .aap-quality-status,
+.aap-quality-original-mode .aap-quality-table-shell {
+  display: none;
+}
+
+.aap-quality-original-mode {
+  display: none !important;
+}
+
+.aap-quality-table-shell {
+  overflow: hidden;
+  border: 1px solid var(--aap-quality-border);
+  border-radius: 8px;
+  background: var(--aap-quality-surface);
+}
+
+.aap-quality-table-section {
+  margin-top: 16px;
+}
+
+.aap-quality-table-section:first-of-type {
+  margin-top: 0;
+}
+
+.aap-quality-table-title {
+  margin: 0 0 8px;
+  color: var(--aap-quality-text);
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.aap-quality-table-scroll {
+  overflow-x: auto;
+}
+
+.aap-quality-table {
+  width: 100%;
+  min-width: 980px;
+  border-collapse: collapse;
+  table-layout: fixed;
+  color: var(--aap-quality-text);
+  font-size: 12px;
+}
+
+.aap-quality-table th,
+.aap-quality-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--aap-quality-border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.aap-quality-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  color: var(--aap-quality-muted);
+  background: var(--aap-quality-surface-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.aap-quality-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.aap-quality-table tbody tr:hover {
+  background: var(--aap-quality-surface-muted);
+}
+
+.aap-quality-table th:nth-child(1) { width: 24%; }
+.aap-quality-table th:nth-child(2) { width: 12%; }
+.aap-quality-table th:nth-child(3) { width: 14%; }
+.aap-quality-table th:nth-child(4),
+.aap-quality-table th:nth-child(5) { width: 13%; }
+.aap-quality-table th:nth-child(6),
+.aap-quality-table th:nth-child(7),
+.aap-quality-table th:nth-child(8) { width: 8%; }
+
+.aap-quality-actor-link {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  color: var(--aap-quality-text);
+  text-decoration: none;
+}
+
+.aap-quality-actor-link:hover {
+  color: #12966f;
+}
+
+.aap-quality-actor-link img {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  border-radius: 6px;
+  object-fit: cover;
+  background: var(--aap-quality-surface-muted);
+}
+
+.aap-quality-actor-name {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 2px;
+}
+
+.aap-quality-actor-name strong,
+.aap-quality-actor-name small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aap-quality-actor-name strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.aap-quality-actor-name small,
+.aap-quality-score small,
+.aap-quality-metric small {
+  color: var(--aap-quality-muted);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.aap-quality-score,
+.aap-quality-metric {
+  font-variant-numeric: tabular-nums;
+}
+
+.aap-quality-score {
+  display: table-cell;
+}
+
+.aap-quality-score strong,
+.aap-quality-metric strong {
+  display: block;
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.aap-quality-meter {
+  display: block;
+  width: 70px;
+  height: 4px;
+  margin: 5px 0 3px;
+  overflow: hidden;
+  border-radius: 99px;
+  background: var(--aap-quality-surface-muted);
+}
+
+.aap-quality-meter-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #12966f;
+}
+
+.aap-quality-setup {
+  vertical-align: top;
+}
+
+.aap-quality-setup strong,
+.aap-quality-insights strong {
+  display: block;
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.aap-quality-setup small,
+.aap-quality-insights small {
+  color: var(--aap-quality-muted);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.aap-quality-setup-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.aap-quality-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 2px 6px;
+  box-sizing: border-box;
+  border-radius: 4px;
+  font-size: 10px;
+  line-height: 18px;
+}
+
+.aap-quality-badge-good {
+  color: #087443;
+  background: rgba(18, 150, 111, 0.14);
+}
+
+.aap-quality-badge-missing {
+  color: var(--aap-quality-muted);
+  background: var(--aap-quality-surface-muted);
+}
+
+.aap-quality-insight-list {
+  line-height: 18px;
+}
+
+.aap-quality-insight-item {
+  color: var(--aap-quality-text);
+  cursor: help;
+  border-bottom: 1px dotted var(--aap-quality-muted);
+}
+
+.aap-quality-insight-item:focus-visible {
+  border-radius: 2px;
+  outline: 2px solid #12966f;
+  outline-offset: 2px;
+}
+
+.aap-quality-tooltip {
+  position: fixed;
+  z-index: 2147483647;
+  display: none;
+  width: max-content;
+  max-width: 240px;
+  padding: 7px 9px;
+  border: 1px solid var(--aap-quality-border, var(--color-neutral-border, rgba(0, 0, 0, 0.2)));
+  border-radius: 6px;
+  color: var(--aap-quality-text, var(--color-neutral-text, #111827));
+  background: var(--aap-quality-surface, var(--color-neutral-background, #ffffff));
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  font-size: 12px;
+  line-height: 17px;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+}
+
+.aap-quality-insight-separator {
+  color: var(--aap-quality-muted);
+}
+
+.aap-quality-empty {
+  color: var(--aap-quality-muted);
+}
+
+.aap-quality-table-empty {
+  height: 72px;
+  color: var(--aap-quality-muted);
+  text-align: center !important;
+  vertical-align: middle !important;
+}
+
+.aap-quality-row-partial {
+  opacity: 0.78;
+}
+
+/* ---- Account-wide Actor acquisition overview --------------------------- */
+.aap-acquisition-overview-page [class*="InsightsChartsWrapper"] {
+  display: none !important;
+}
+
+.aap-acquisition-overview {
+  --aap-acquisition-surface: var(--color-neutral-background, #ffffff);
+  --aap-acquisition-surface-muted: var(--color-neutral-background-muted, rgba(0, 0, 0, 0.05));
+  --aap-acquisition-text: var(--color-neutral-text, #111827);
+  --aap-acquisition-muted: var(--color-neutral-text-subtle, #4b5563);
+  --aap-acquisition-border: var(--color-neutral-border, rgba(0, 0, 0, 0.18));
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 8px;
+  color: var(--aap-acquisition-text);
+  font-size: 13px;
+}
+
+.aap-acquisition-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.aap-acquisition-header h2 {
+  margin: 0;
+  color: var(--aap-acquisition-text);
+  font-size: 18px;
+  line-height: 24px;
+}
+
+.aap-acquisition-header p {
+  margin: 4px 0 0;
+  color: var(--aap-acquisition-muted);
+  line-height: 20px;
+}
+
+.aap-acquisition-summary {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--aap-acquisition-muted);
+  font-variant-numeric: tabular-nums;
+  line-height: 24px;
+  text-align: right;
+}
+
+.aap-acquisition-toggle {
+  height: 34px;
+  min-height: 34px;
+  padding: 6px 12px;
+  box-sizing: border-box;
+  border: 1px solid var(--aap-acquisition-border);
+  border-radius: 5px;
+  color: var(--aap-acquisition-text);
+  background: var(--aap-acquisition-surface);
+  font: inherit;
+  line-height: 20px;
+  cursor: pointer;
+}
+
+.aap-acquisition-toggle:hover,
+.aap-acquisition-toggle:focus-visible {
+  border-color: #12966f;
+  outline: none;
+}
+
+.aap-acquisition-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.aap-acquisition-controls input,
+.aap-acquisition-controls select,
+.aap-acquisition-order,
+.aap-acquisition-refresh {
+  height: 34px;
+  min-height: 34px;
+  box-sizing: border-box;
+  border: 1px solid var(--aap-acquisition-border);
+  border-radius: 5px;
+  color: var(--aap-acquisition-text);
+  background: var(--aap-acquisition-surface);
+  font: inherit;
+  line-height: 20px;
+}
+
+.aap-acquisition-controls input {
+  width: min(300px, 100%);
+  padding: 6px 9px;
+}
+
+.aap-acquisition-controls select {
+  min-width: 170px;
+  padding: 6px 28px 6px 9px;
+}
+
+.aap-acquisition-order,
+.aap-acquisition-refresh {
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+.aap-acquisition-controls input:focus-visible,
+.aap-acquisition-controls select:focus-visible,
+.aap-acquisition-order:focus-visible,
+.aap-acquisition-refresh:focus-visible,
+.aap-acquisition-order:hover,
+.aap-acquisition-refresh:hover {
+  border-color: #12966f;
+  outline: none;
+}
+
+.aap-acquisition-original-mode {
+  display: none !important;
+}
+
+.aap-acquisition-original-mode .aap-acquisition-status,
+.aap-acquisition-original-mode .aap-acquisition-table-section {
+  display: none;
+}
+
+.aap-acquisition-status {
+  min-height: 20px;
+  margin-bottom: 8px;
+  color: var(--aap-acquisition-muted);
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.aap-acquisition-table-shell {
+  overflow: hidden;
+  border: 1px solid var(--aap-acquisition-border);
+  border-radius: 8px;
+  background: var(--aap-acquisition-surface);
+}
+
+.aap-acquisition-table-scroll {
+  overflow-x: auto;
+}
+
+.aap-acquisition-table {
+  width: 100%;
+  min-width: 980px;
+  border-collapse: collapse;
+  table-layout: fixed;
+  color: var(--aap-acquisition-text);
+  font-size: 12px;
+}
+
+.aap-acquisition-table th,
+.aap-acquisition-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--aap-acquisition-border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.aap-acquisition-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  color: var(--aap-acquisition-muted);
+  background: var(--aap-acquisition-surface-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.aap-acquisition-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.aap-acquisition-table tbody tr:hover {
+  background: var(--aap-acquisition-surface-muted);
+}
+
+.aap-acquisition-table th:nth-child(1) { width: 27%; }
+.aap-acquisition-table th:nth-child(2),
+.aap-acquisition-table th:nth-child(3),
+.aap-acquisition-table th:nth-child(4) { width: 13%; }
+.aap-acquisition-table th:nth-child(5),
+.aap-acquisition-table th:nth-child(6) { width: 17%; }
+
+.aap-acquisition-actor-link {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  color: var(--aap-acquisition-text);
+  text-decoration: none;
+}
+
+.aap-acquisition-actor-link:hover {
+  color: #12966f;
+}
+
+.aap-acquisition-actor-link img {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  border-radius: 6px;
+  object-fit: cover;
+  background: var(--aap-acquisition-surface-muted);
+}
+
+.aap-acquisition-actor-name {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 2px;
+}
+
+.aap-acquisition-actor-name strong,
+.aap-acquisition-actor-name small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aap-acquisition-actor-name strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.aap-acquisition-actor-name small,
+.aap-acquisition-metric small {
+  color: var(--aap-acquisition-muted);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.aap-acquisition-metric {
+  font-variant-numeric: tabular-nums;
+}
+
+.aap-acquisition-metric strong {
+  display: block;
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.aap-acquisition-change {
+  display: block;
+  color: var(--aap-acquisition-muted);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.aap-acquisition-change-positive {
+  color: #168a68 !important;
+  font-weight: 600;
+}
+
+.aap-acquisition-change-negative {
+  color: #d14343 !important;
+  font-weight: 600;
+}
+
+.aap-acquisition-source {
+  overflow-wrap: anywhere;
+}
+
+.aap-acquisition-source-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 17px;
+}
+
+.aap-acquisition-source-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.aap-acquisition-source-line small {
+  flex: 0 0 auto;
+  color: var(--aap-acquisition-muted);
+  font-size: 11px;
+  line-height: 17px;
+  white-space: nowrap;
+}
+
+.aap-acquisition-source-label {
+  border-bottom: 1px dotted var(--aap-acquisition-muted);
+  color: var(--aap-acquisition-text);
+  cursor: help;
+}
+
+.aap-acquisition-empty,
+.aap-acquisition-table-empty {
+  color: var(--aap-acquisition-muted);
+}
+
+.aap-acquisition-table-empty {
+  height: 72px;
+  text-align: center !important;
+  vertical-align: middle !important;
+}
+
+.aap-acquisition-row-partial {
+  opacity: 0.78;
+}
+
+.aap-acquisition-table-section {
+  margin-top: 16px;
+}
+
+.aap-acquisition-table-title {
+  margin: 0 0 8px;
+  color: var(--aap-acquisition-text);
+  font-size: 14px;
+  line-height: 20px;
+}
+
+/* ---- Account-wide run-success overview ------------------------------- */
+.aap-debugging-overview-page [class*="InsightsChartsWrapper"] {
+  display: none !important;
+}
+
+.aap-debugging-overview-page [hidden] {
+  display: none !important;
+}
+
+.aap-debugging-overview {
+  --aap-debugging-surface: var(--color-neutral-background, #ffffff);
+  --aap-debugging-surface-muted: var(--color-neutral-background-muted, rgba(0, 0, 0, 0.05));
+  --aap-debugging-text: var(--color-neutral-text, #111827);
+  --aap-debugging-muted: var(--color-neutral-text-subtle, #4b5563);
+  --aap-debugging-border: var(--color-neutral-border, rgba(0, 0, 0, 0.18));
+  --aap-debugging-grid: var(--color-neutral-separator-subtle, var(--aap-debugging-border));
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 8px;
+  color: var(--aap-debugging-text);
+  font-size: 13px;
+}
+
+.aap-debugging-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 8px;
+}
+
+.aap-debugging-header h2 {
+  margin: 0;
+  color: var(--aap-debugging-text);
+  font-size: 18px;
+  line-height: 24px;
+}
+
+.aap-debugging-header p {
+  margin: 4px 0 0;
+  color: var(--aap-debugging-muted);
+  line-height: 20px;
+}
+
+.aap-debugging-summary,
+.aap-debugging-runs-status {
+  color: var(--aap-debugging-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.aap-debugging-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.aap-debugging-summary {
+  flex: 0 0 auto;
+  line-height: 24px;
+  text-align: right;
+}
+
+.aap-debugging-show-all {
+  flex: 0 0 auto;
+  align-self: center;
+  color: #12966f;
+  font-size: 12px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.aap-debugging-show-all:hover {
+  text-decoration: underline;
+}
+
+.aap-debugging-sort,
+.aap-debugging-order,
+.aap-debugging-refresh,
+.aap-debugging-more {
+  height: 34px;
+  min-height: 34px;
+  padding: 6px 12px;
+  box-sizing: border-box;
+  border: 1px solid var(--aap-debugging-border);
+  border-radius: 5px;
+  color: var(--aap-debugging-text);
+  background: transparent;
+  font: inherit;
+  line-height: 20px;
+  cursor: pointer;
+}
+
+.aap-debugging-sort {
+  min-width: 148px;
+  padding: 6px 28px 6px 9px;
+  background: var(--aap-debugging-surface);
+}
+
+.aap-debugging-sort option {
+  color: var(--aap-debugging-text);
+  background: var(--aap-debugging-surface);
+}
+
+.aap-debugging-sort:hover,
+.aap-debugging-sort:focus-visible,
+.aap-debugging-order:hover,
+.aap-debugging-order:focus-visible,
+.aap-debugging-refresh:hover,
+.aap-debugging-refresh:focus-visible,
+.aap-debugging-more:hover,
+.aap-debugging-more:focus-visible {
+  border-color: #12966f;
+  outline: none;
+}
+
+.aap-debugging-sort:disabled,
+.aap-debugging-order:disabled,
+.aap-debugging-refresh:disabled,
+.aap-debugging-more:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.aap-debugging-status {
+  min-height: 20px;
+  margin-bottom: 8px;
+  color: var(--aap-debugging-muted);
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.aap-debugging-original-mode .aap-debugging-status,
+.aap-debugging-original-mode .aap-debugging-section,
+.aap-debugging-original-mode .aap-debugging-runs-section {
+  display: none;
+}
+
+.aap-debugging-original-mode {
+  display: none !important;
+}
+
+.aap-debugging-status:empty {
+  display: none;
+}
+
+.aap-debugging-section,
+.aap-debugging-runs-section {
+  margin-top: 16px;
+}
+
+.aap-debugging-section:first-of-type {
+  margin-top: 0;
+}
+
+.aap-debugging-section-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0 0 8px;
+  color: var(--aap-debugging-text);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 20px;
+}
+
+.aap-debugging-selected-summary {
+  color: var(--aap-debugging-muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.aap-debugging-runs-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.aap-debugging-table-shell {
+  overflow: hidden;
+  border: 1px solid var(--aap-debugging-border);
+  border-radius: 8px;
+  background: var(--aap-debugging-surface);
+}
+
+.aap-debugging-table-scroll {
+  overflow-x: auto;
+}
+
+.aap-debugging-table,
+.aap-debugging-runs-table {
+  width: 100%;
+  border-collapse: collapse;
+  color: var(--aap-debugging-text);
+  font-size: 12px;
+}
+
+.aap-debugging-table {
+  min-width: 820px;
+  table-layout: fixed;
+}
+
+.aap-debugging-runs-table {
+  min-width: 760px;
+}
+
+.aap-debugging-table th,
+.aap-debugging-table td,
+.aap-debugging-runs-table th,
+.aap-debugging-runs-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--aap-debugging-border);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.aap-debugging-table th,
+.aap-debugging-runs-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  color: var(--aap-debugging-muted);
+  background: var(--aap-debugging-surface-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.aap-debugging-table tr:last-child td,
+.aap-debugging-runs-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.aap-debugging-table tbody tr:hover,
+.aap-debugging-runs-table tbody tr:hover {
+  background: var(--aap-debugging-surface-muted);
+}
+
+.aap-debugging-table th:nth-child(1) { width: 25%; }
+.aap-debugging-table th:nth-child(2) { width: 18%; }
+.aap-debugging-table th:nth-child(3) { width: 57%; }
+
+.aap-debugging-runs-table th:nth-child(1) { width: 25%; }
+.aap-debugging-runs-table th:nth-child(2) { width: 14%; }
+.aap-debugging-runs-table th:nth-child(3) { width: 20%; }
+.aap-debugging-runs-table th:nth-child(4) { width: 13%; }
+.aap-debugging-runs-table th:nth-child(5) { width: 14%; }
+.aap-debugging-runs-table th:nth-child(6) { width: 14%; }
+
+.aap-debugging-actor-link {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  color: var(--aap-debugging-text);
+  text-decoration: none;
+}
+
+.aap-debugging-actor-link:hover {
+  color: #12966f;
+}
+
+.aap-debugging-actor-link img {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  border-radius: 6px;
+  object-fit: cover;
+  background: var(--aap-debugging-surface-muted);
+}
+
+.aap-debugging-actor-name {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 2px;
+}
+
+.aap-debugging-actor-name strong,
+.aap-debugging-actor-name small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aap-debugging-actor-name strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.aap-debugging-actor-name small,
+.aap-debugging-summary-cell small {
+  color: var(--aap-debugging-muted);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.aap-debugging-summary-cell {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.aap-debugging-summary-cell strong {
+  display: block;
+  font-size: 16px;
+  line-height: 20px;
+}
+
+.aap-debugging-summary-cell small {
+  display: block;
+}
+
+.aap-debugging-lowest {
+  color: #d97706 !important;
+}
+
+.aap-debugging-chart-cell {
+  height: 108px;
+  padding-top: 6px !important;
+  padding-bottom: 6px !important;
+}
+
+.aap-debugging-chart {
+  display: block;
+  width: 100%;
+  height: 96px;
+}
+
+.aap-debugging-empty,
+.aap-debugging-table-empty {
+  color: var(--aap-debugging-muted);
+}
+
+.aap-debugging-table-empty {
+  height: 72px;
+  text-align: center !important;
+  vertical-align: middle !important;
+}
+
+.aap-debugging-row-partial {
+  opacity: 0.82;
+}
+
+.aap-debugging-run-link {
+  color: #12966f;
+  text-decoration: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.aap-debugging-run-link:hover {
+  text-decoration: underline;
+}
+
+.aap-debugging-run-number {
+  font-variant-numeric: tabular-nums;
+}
+
+.aap-debugging-run-status {
+  font-weight: 600;
+}
+
+.aap-debugging-status-succeeded {
+  color: #168a68;
+}
+
+.aap-debugging-status-failed,
+.aap-debugging-status-aborted,
+.aap-debugging-status-timed-out {
+  color: #d14343;
+}
+
+.aap-debugging-more {
+  display: block;
+  margin: 10px auto 0;
+}
+
+.aap-debugging-tooltip {
+  position: fixed;
+  z-index: 2147483647;
+  display: none;
+  max-width: 260px;
+  padding: 8px 10px;
+  border: 1px solid var(--aap-debugging-border, rgba(0, 0, 0, 0.2));
+  border-radius: 6px;
+  color: var(--aap-debugging-text, #111827);
+  background: var(--aap-debugging-surface, #ffffff);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  pointer-events: none;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.aap-debugging-tooltip-title {
+  margin-bottom: 3px;
+  font-weight: 600;
+}
+
+.aap-debugging-tooltip-row {
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .aap-quality-header {
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .aap-quality-controls {
+    flex-wrap: wrap;
+  }
+
+  .aap-quality-controls input {
+    width: 100%;
+  }
+
+  .aap-acquisition-header {
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .aap-acquisition-summary {
+    margin-left: 0;
+    text-align: left;
+  }
+
+  .aap-acquisition-controls {
+    flex-wrap: wrap;
+  }
+
+  .aap-acquisition-controls input {
+    width: 100%;
+  }
+
+  .aap-debugging-header {
+    flex-wrap: wrap;
+    gap: 4px 12px;
+  }
+
+  .aap-debugging-summary {
+    margin-left: 0;
+    text-align: left;
+  }
+
+  .aap-debugging-show-all {
+    align-self: auto;
+  }
+
+  .aap-debugging-actions {
+    width: 100%;
+    justify-content: flex-start;
+    margin-left: 0;
+  }
+
+  .aap-debugging-runs-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 2px;
+  }
+}
+
+@media (max-width: 760px) {
+  .aap-range-selector {
+    width: 100%;
+    margin: 10px 0 0;
+  }
+
+  .aap-range-custom-controls {
+    width: 100%;
+  }
+}
+
+/* Keep the overview toolbars identical across Quality, Acquisition, and
+   Debugging. Each overview still supplies its own themed color variables. */
+.aap-insights-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.aap-insights-controls input[type="search"],
+.aap-insights-controls select,
+.aap-insights-controls > button {
+  height: 34px;
+  min-height: 34px;
+  box-sizing: border-box;
+  border: 1px solid var(--aap-quality-border, var(--aap-acquisition-border, var(--aap-debugging-border)));
+  border-radius: 5px;
+  color: var(--aap-quality-text, var(--aap-acquisition-text, var(--aap-debugging-text)));
+  background: var(--aap-quality-surface, var(--aap-acquisition-surface, var(--aap-debugging-surface)));
+  font: inherit;
+  line-height: 20px;
+}
+
+.aap-insights-controls input[type="search"] {
+  width: min(300px, 100%);
+  min-width: 180px;
+  padding: 6px 9px;
+}
+
+.aap-insights-controls select {
+  min-width: 160px;
+  padding: 6px 28px 6px 9px;
+}
+
+.aap-insights-controls > button {
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+.aap-debugging-header {
+  margin-bottom: 16px;
+}
+
+.aap-insights-view-toggle {
+  display: inline-flex;
+  align-items: center;
+  height: 34px;
+  box-sizing: border-box;
+  padding: 2px;
+  border: 1px solid var(--aap-quality-border, var(--aap-acquisition-border, var(--aap-debugging-border)));
+  border-radius: 6px;
+  background: var(--aap-quality-surface-muted, var(--aap-acquisition-surface-muted, var(--aap-debugging-surface-muted)));
+}
+
+.aap-insights-view-button {
+  height: 28px;
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 4px;
+  color: var(--aap-quality-muted, var(--aap-acquisition-muted, var(--aap-debugging-muted)));
+  background: transparent;
+  font: inherit;
+  line-height: 20px;
+  cursor: pointer;
+}
+
+.aap-insights-view-button:hover,
+.aap-insights-view-button:focus-visible {
+  color: var(--aap-quality-text, var(--aap-acquisition-text, var(--aap-debugging-text)));
+  outline: none;
+}
+
+.aap-insights-view-button-active {
+  color: var(--aap-quality-text, var(--aap-acquisition-text, var(--aap-debugging-text)));
+  background: var(--aap-quality-surface, var(--aap-acquisition-surface, var(--aap-debugging-surface)));
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+}
+
+/* The view switch belongs to the native Insights navigation, so it stays in
+   the same place while switching between Monetization, Debugging, Acquisition,
+   and Actor quality. */
+.aap-insights-nav-view-toggle {
+  display: inline-flex;
+  align-items: center;
+  align-self: center;
+  flex-shrink: 0;
+  height: 32px;
+  box-sizing: border-box;
+  gap: 2px;
+  margin: 0 4px 0 8px;
+  padding: 2px;
+  border: 1px solid var(--color-neutral-border, rgba(17, 24, 39, 0.2));
+  border-radius: 6px;
+  background: var(--color-neutral-background-muted, rgba(0, 0, 0, 0.05));
+}
+
+.aap-insights-nav-view-button {
+  height: 26px;
+  padding: 3px 9px;
+  border: 0;
+  border-radius: 4px;
+  color: var(--color-neutral-text-muted, var(--color-neutral-text-subtle, #6b7280));
+  background: transparent;
+  font: inherit;
+  line-height: 20px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.aap-insights-nav-view-button:hover,
+.aap-insights-nav-view-button:focus-visible {
+  color: var(--color-neutral-text, #111827);
+  outline: none;
+}
+
+.aap-insights-nav-view-button-active {
+  color: var(--color-neutral-text, #111827);
+  background: var(--color-neutral-background, #ffffff);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+}

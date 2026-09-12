@@ -1,0 +1,70 @@
+{
+  "manifest_version": 3,
+  "name": "Apify Insights Plus",
+  "version": "0.0.1",
+  "description": "Adds ranged analytics, account-wide Actor quality, acquisition, and debugging overviews to the Apify Console Insights pages.",
+  "permissions": [
+    "storage"
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_title": "Apify Insights Plus",
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://console.apify.com/*",
+        "https://apify.com/*",
+        "https://www.apify.com/*"
+      ],
+      "js": [
+        "content/promo.js"
+      ],
+      "css": [
+        "content/promo.css"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://console.apify.com/*"
+      ],
+      "js": [
+        "content/token-sniffer.js"
+      ],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://console.apify.com/*"
+      ],
+      "js": [
+        "lib/format.js",
+        "lib/range.js",
+        "lib/api.js",
+        "lib/cache.js",
+        "lib/insights-nav.js",
+        "content/app.js",
+        "content/range.js",
+        "content/quality.js",
+        "content/acquisition.js",
+        "content/debugging.js"
+      ],
+      "css": [
+        "content/app.css"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}
