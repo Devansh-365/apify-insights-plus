@@ -1,0 +1,63 @@
+.aap-profile-promo {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 2147483000;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: calc(100vw - 32px);
+  padding: 6px 9px;
+  overflow: hidden;
+  border: 1px solid var(--color-neutral-border, rgba(17, 24, 39, 0.2));
+  border-radius: 999px;
+  color: var(--color-neutral-text-muted, var(--color-neutral-text, #374151));
+  background: var(--color-neutral-background, #ffffff);
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.16);
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  font-size: 11px;
+  line-height: 16px;
+  text-decoration: none;
+  opacity: 0.9;
+  transition: opacity 120ms ease-out, border-color 120ms ease-out, transform 120ms ease-out;
+}
+
+.aap-profile-promo:hover,
+.aap-profile-promo:focus-visible {
+  border-color: #f5b942;
+  color: var(--color-neutral-text, #111827);
+  opacity: 1;
+  outline: none;
+  transform: translateY(-1px);
+}
+
+.aap-profile-promo-author {
+  color: var(--color-neutral-text-muted, var(--color-neutral-text, #374151));
+}
+
+.aap-profile-promo-action {
+  color: #b77900;
+  font-weight: 650;
+}
+
+/* Intercom occupies the lower-right corner on Console pages. Keep the promo
+   immediately to its left when that launcher is present, without changing its
+   normal position on pages that do not load Intercom. */
+body:has(.intercom-lightweight-app-launcher) .aap-profile-promo,
+body:has(#intercom-container) .aap-profile-promo {
+  right: 88px;
+  bottom: 16px;
+}
+
+@media (max-width: 560px) {
+  .aap-profile-promo {
+    right: 10px;
+    bottom: 10px;
+  }
+
+  body:has(.intercom-lightweight-app-launcher) .aap-profile-promo,
+  body:has(#intercom-container) .aap-profile-promo {
+    right: 78px;
+    bottom: 10px;
+  }
+}
