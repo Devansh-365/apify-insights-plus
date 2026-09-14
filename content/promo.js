@@ -1,7 +1,7 @@
-/* Adds a small profile link to Apify pages. */
+/* Adds a small X follow link to Apify pages. */
 (function () {
   const PROMO_ID = "aap-profile-promo";
-  const PROFILE_URL = "https://apify.com/igolaizola?fpr=ig";
+  const SOCIAL_URL = "https://x.com/igolaizola";
 
   function ensurePromo() {
     if (!document.body || document.getElementById(PROMO_ID)) return;
@@ -9,15 +9,15 @@
     const link = document.createElement("a");
     link.id = PROMO_ID;
     link.className = "aap-profile-promo";
-    link.href = PROFILE_URL;
+    link.href = SOCIAL_URL;
     link.target = "_blank";
     link.rel = "noopener noreferrer";
-    link.title = "Visit @igolaizola's Apify profile";
-    link.setAttribute("aria-label", "Visit @igolaizola's Apify profile");
+    link.title = "Follow @igolaizola on X";
+    link.setAttribute("aria-label", "Follow @igolaizola on X");
 
     const author = document.createElement("span");
     author.className = "aap-profile-promo-author";
-    author.textContent = "Top Actors by";
+    author.textContent = "Follow";
     const action = document.createElement("span");
     action.className = "aap-profile-promo-action";
     action.textContent = "@igolaizola ↗";
