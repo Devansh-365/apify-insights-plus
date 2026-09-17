@@ -3,7 +3,13 @@
   const ROUTE_RE = /^(?:\/organization\/[^/]+)?\/actors\/insights\/acquisition\/?$/;
   const OVERVIEW_CLASS = "aap-acquisition-overview-page";
   const HOST_CLASS = "aap-acquisition-overview";
-  const MAX_CONCURRENT = 5;
+  const MAX_CONCURRENT = 10;
+
+  // Matches lib/api.js's cacheTtl(): current-month data settles quickly and
+  // is worth re-checking every minute; historical months are effectively
+  // final, so re-check them far less often.
+  const CURRENT_MONTH_REFRESH_TTL_MS = 60 * 1000;
+  const HISTORICAL_REFRESH_TTL_MS = 15 * 60 * 1000;
 
   const state = {
     actors: [],
@@ -20,11 +26,26 @@
     completed: 0,
     totalLoaded: false,
     requestId: 0,
+    loadedAt: 0,
   };
 
   let host = null;
   let refs = null;
   let pageThemeSignature = "";
+
+  AAP_API.onTokenChange?.(() => {
+    // A tab can stay open while the user logs out or switches accounts. Do
+    // not keep showing the previous account's acquisition data in that case.
+    state.requestId++;
+    state.loading = false;
+    state.monthStartAt = null;
+    state.total = null;
+    state.totalPrevious = null;
+    state.totalLoaded = false;
+    state.actors = [];
+    state.rows = [];
+    state.loadedAt = 0;
+  });
 
   function onOverviewRoute() {
     return ROUTE_RE.test(location.pathname) && !new URLSearchParams(location.search).has("actorId");
@@ -120,6 +141,15 @@
     return value ? new Date(value).toLocaleDateString(undefined, { month: "long", year: "numeric", timeZone: "UTC" }) : "selected month";
   }
 
+  function currentCalendarMonthStartAt() {
+    const now = new Date();
+    return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}-01T00:00:00.000Z`;
+  }
+
+  function refreshTtl(month) {
+    return month === currentCalendarMonthStartAt() ? CURRENT_MONTH_REFRESH_TTL_MS : HISTORICAL_REFRESH_TTL_MS;
+  }
+
   function previousMonthStartAt(value) {
     const date = new Date(value);
     date.setUTCMonth(date.getUTCMonth() - 1);
@@ -182,7 +212,7 @@
     };
   }
 
-  async function loadActorRows(actors, month, previousMonth, portion, requestId) {
+  async function loadActorRows(actors, month, previousMonth, portion, requestId, silent) {
     const rows = new Array(actors.length);
     let next = 0;
     let completed = 0;
@@ -193,9 +223,11 @@
         rows[index] = await loadActor(actors[index], month, previousMonth, portion);
         completed++;
         if (requestId !== state.requestId) continue;
-        state.completed = completed;
-        state.rows = rows.filter(Boolean);
-        renderRows();
+        if (!silent) {
+          state.completed = completed;
+          state.rows = rows.filter(Boolean);
+          renderRows();
+        }
       }
     }
 
@@ -463,7 +495,9 @@
     }
     if (created) renderRows();
     const month = monthStartAt();
-    if (!state.showOriginal && (!state.requestId || state.monthStartAt !== month)) beginLoad(month, false);
+    if (state.showOriginal) return;
+    if (!state.requestId || state.monthStartAt !== month) { beginLoad(month, false); return; }
+    if (Date.now() - state.loadedAt > refreshTtl(month)) beginLoad(month, false, true);
   }
 
   function removeHost() {
@@ -472,28 +506,25 @@
     host?.remove();
     host = null;
     refs = null;
-    state.requestId++;
-    state.loading = false;
-    state.monthStartAt = null;
-    state.total = null;
-    state.totalPrevious = null;
-    state.totalLoaded = false;
   }
 
-  async function beginLoad(month, force) {
+  async function beginLoad(month, force, silent = false) {
     if (state.loading && state.monthStartAt === month) return;
-    if (!force && state.requestId && state.monthStartAt === month) return;
+    if (!force && !silent && state.requestId && state.monthStartAt === month) return;
     const requestId = ++state.requestId;
-    state.loading = true;
-    state.error = null;
-    state.monthStartAt = month;
-    state.actors = [];
-    state.rows = [];
-    state.completed = 0;
-    state.total = null;
-    state.totalPrevious = null;
-    state.totalLoaded = false;
-    renderRows();
+    state.loadedAt = Date.now();
+    if (!silent) {
+      state.loading = true;
+      state.error = null;
+      state.monthStartAt = month;
+      state.actors = [];
+      state.rows = [];
+      state.completed = 0;
+      state.total = null;
+      state.totalPrevious = null;
+      state.totalLoaded = false;
+      renderRows();
+    }
     try {
       const previousMonth = previousMonthStartAt(month);
       const portion = comparisonPortion(month);
@@ -506,15 +537,17 @@
       ]);
       const actors = normalizeActors(rawActors);
       if (requestId !== state.requestId) return;
+      state.monthStartAt = month;
       state.actors = actors;
       state.total = totals[0].status === "fulfilled" ? totals[0].value : null;
       state.totalPrevious = totals[1].status === "fulfilled" ? totals[1].value : null;
       state.totalLoaded = true;
-      renderRows();
-      await loadActorRows(actors, month, previousMonth, portion, requestId);
+      if (!silent) renderRows();
+      const rows = await loadActorRows(actors, month, previousMonth, portion, requestId, silent);
       if (requestId !== state.requestId) return;
+      if (silent) state.rows = rows;
     } catch (error) {
-      if (requestId === state.requestId) state.error = `Couldn't load acquisition data${error?.message ? `: ${error.message}` : "."}`;
+      if (requestId === state.requestId && !silent) state.error = `Couldn't load acquisition data${error?.message ? `: ${error.message}` : "."}`;
     } finally {
       if (requestId === state.requestId) {
         state.loading = false;

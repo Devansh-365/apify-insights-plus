@@ -3,7 +3,12 @@
   const ROUTE_RE = /^(?:\/organization\/[^/]+)?\/actors\/insights\/actor-quality\/?$/;
   const OVERVIEW_CLASS = "aap-quality-overview-page";
   const HOST_CLASS = "aap-quality-overview";
-  const MAX_CONCURRENT = 5;
+  const MAX_CONCURRENT = 10;
+
+  // Quality scores/recommendations rarely change; re-check them on the same
+  // cadence as Monetization's breakdown reindex so a long-open tab doesn't
+  // show numbers from whenever it was first opened.
+  const QUALITY_REFRESH_TTL_MS = 15 * 60 * 1000;
 
   const state = {
     actors: [],
@@ -17,12 +22,25 @@
     error: null,
     completed: 0,
     requestId: 0,
+    loadedAt: 0,
   };
 
   let host = null;
   let refs = null;
   let pageThemeSignature = "";
   let qualityTooltip = null;
+
+  AAP_API.onTokenChange?.(() => {
+    // A tab can stay open while the user logs out or switches accounts. Do
+    // not keep showing the previous account's quality data in that case.
+    state.requestId = 0;
+    state.loading = false;
+    state.error = null;
+    state.actors = [];
+    state.rows = [];
+    state.completed = 0;
+    state.loadedAt = 0;
+  });
 
   function onOverviewRoute() {
     return ROUTE_RE.test(location.pathname) && !new URLSearchParams(location.search).has("actorId");
@@ -131,7 +149,7 @@
     };
   }
 
-  async function loadActorRows(actors, requestId) {
+  async function loadActorRows(actors, requestId, silent) {
     const rows = new Array(actors.length);
     let next = 0;
     let completed = 0;
@@ -146,9 +164,11 @@
         }
         completed++;
         if (requestId !== state.requestId) continue;
-        state.completed = completed;
-        state.rows = rows.filter(Boolean);
-        renderRows();
+        if (!silent) {
+          state.completed = completed;
+          state.rows = rows.filter(Boolean);
+          renderRows();
+        }
       }
     }
 
@@ -617,7 +637,9 @@
     }
     if (empty) empty.dataset.aapQualityNative = "hidden";
     if (created) renderRows();
-    if (!state.showOriginal && !state.requestId) beginLoad(false);
+    if (state.showOriginal) return;
+    if (!state.requestId) beginLoad(false);
+    else if (Date.now() - state.loadedAt > QUALITY_REFRESH_TTL_MS) beginLoad(false, true);
   }
 
   function removeHost() {
@@ -629,25 +651,29 @@
     refs = null;
   }
 
-  async function beginLoad(force) {
+  async function beginLoad(force, silent = false) {
     if (state.loading) return;
-    if (!force && state.requestId) return;
+    if (!force && !silent && state.requestId) return;
     const requestId = ++state.requestId;
-    state.loading = true;
-    state.error = null;
-    state.actors = [];
-    state.rows = [];
-    state.completed = 0;
-    renderRows();
+    state.loadedAt = Date.now();
+    if (!silent) {
+      state.loading = true;
+      state.error = null;
+      state.actors = [];
+      state.rows = [];
+      state.completed = 0;
+      renderRows();
+    }
     try {
       const actors = normalizeActors(await AAP_API.actorList());
       if (requestId !== state.requestId) return;
       state.actors = actors;
-      renderRows();
-      await loadActorRows(actors, requestId);
+      if (!silent) renderRows();
+      const rows = await loadActorRows(actors, requestId, silent);
       if (requestId !== state.requestId) return;
+      if (silent) state.rows = rows;
     } catch (error) {
-      if (requestId === state.requestId) state.error = `Couldn't load Actor quality data${error?.message ? `: ${error.message}` : "."}`;
+      if (requestId === state.requestId && !silent) state.error = `Couldn't load Actor quality data${error?.message ? `: ${error.message}` : "."}`;
     } finally {
       if (requestId === state.requestId) {
         state.loading = false;

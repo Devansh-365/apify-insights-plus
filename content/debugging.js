@@ -5,6 +5,13 @@
   const HOST_CLASS = "aap-debugging-overview";
   const MAX_RUNS_PER_PAGE = 100;
 
+  // Matches lib/api.js's cacheTtl(): current-month data settles quickly and
+  // is worth re-checking every minute; historical months are effectively
+  // final, so re-check them far less often. Only applies to the account-wide
+  // overview (no Actor selected) — see ensureHost().
+  const CURRENT_MONTH_REFRESH_TTL_MS = 60 * 1000;
+  const HISTORICAL_REFRESH_TTL_MS = 15 * 60 * 1000;
+
   const state = {
     actors: [],
     rows: [],
@@ -20,6 +27,7 @@
     error: null,
     completed: 0,
     requestId: 0,
+    loadedAt: 0,
     runs: [],
     runsTotal: null,
     runsNextPageToken: null,
@@ -32,6 +40,20 @@
   let pageThemeSignature = "";
   let lastRouteKey = "";
   let tooltip = null;
+
+  AAP_API.onTokenChange?.(() => {
+    // A tab can stay open while the user logs out or switches accounts. Do
+    // not keep showing the previous account's debugging data in that case.
+    state.requestId++;
+    state.contextKey = null;
+    state.loading = false;
+    state.actors = [];
+    state.rows = [];
+    state.total = null;
+    state.runs = [];
+    state.runsNextPageToken = null;
+    state.loadedAt = 0;
+  });
 
   const onRoute = () => ROUTE_RE.test(location.pathname);
 
@@ -136,6 +158,15 @@
     return value
       ? new Date(value).toLocaleDateString(undefined, { month: "long", year: "numeric", timeZone: "UTC" })
       : "selected month";
+  }
+
+  function currentCalendarMonthStartAt() {
+    const now = new Date();
+    return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}-01T00:00:00.000Z`;
+  }
+
+  function refreshTtl(month) {
+    return month === currentCalendarMonthStartAt() ? CURRENT_MONTH_REFRESH_TTL_MS : HISTORICAL_REFRESH_TTL_MS;
   }
 
   function isFutureDay(day) {
@@ -620,7 +651,12 @@
     const month = currentMonthStartAt();
     const actor = currentActorId();
     const key = contextKey(month, actor);
-    if (!state.showOriginal && key !== state.contextKey) beginLoad(month, actor, false);
+    if (state.showOriginal) return;
+    if (key !== state.contextKey) { beginLoad(month, actor, false); return; }
+    // Periodic silent refresh only applies to the account-wide overview: a
+    // background refresh of the selected-Actor run list would reset its
+    // pagination back to page 1 while the user is actively reading it.
+    if (!actor && Date.now() - state.loadedAt > refreshTtl(month)) beginLoad(month, actor, false, true);
   }
 
   function removeHost() {
@@ -629,34 +665,30 @@
     host?.remove();
     host = null;
     refs = null;
-    state.requestId++;
-    state.contextKey = null;
-    state.loading = false;
-    state.rows = [];
-    state.total = null;
-    state.runs = [];
-    state.runsNextPageToken = null;
     hideTooltip();
   }
 
-  async function beginLoad(monthStartAt, actor, force) {
+  async function beginLoad(monthStartAt, actor, force, silent = false) {
     const key = contextKey(monthStartAt, actor);
-    if (!force && state.contextKey === key && (state.loading || state.rows.length || state.total)) return;
+    if (!force && !silent && state.contextKey === key && (state.loading || state.rows.length || state.total)) return;
     const requestId = ++state.requestId;
-    state.contextKey = key;
-    state.selectedActorId = actor;
-    state.monthStartAt = monthStartAt;
-    state.loading = true;
-    state.error = null;
-    state.completed = 0;
-    state.rows = [];
-    state.total = null;
-    state.runs = [];
-    state.runsTotal = null;
-    state.runsNextPageToken = null;
-    state.runsError = null;
-    state.runsLoading = false;
-    renderRows();
+    state.loadedAt = Date.now();
+    if (!silent) {
+      state.contextKey = key;
+      state.selectedActorId = actor;
+      state.monthStartAt = monthStartAt;
+      state.loading = true;
+      state.error = null;
+      state.completed = 0;
+      state.rows = [];
+      state.total = null;
+      state.runs = [];
+      state.runsTotal = null;
+      state.runsNextPageToken = null;
+      state.runsError = null;
+      state.runsLoading = false;
+      renderRows();
+    }
     try {
       // The native no-filter chart is backed by this single account-wide
       // request. Start it before waiting for the Actor list so its chart can
@@ -667,12 +699,14 @@
           .then((raw) => {
             if (requestId !== state.requestId) return;
             state.total = statsFor(raw);
-            renderRows();
+            if (!silent) renderRows();
           })
           .catch(() => {
             if (requestId !== state.requestId) return;
-            state.error = "Could not load the account-wide success-rate data.";
-            renderRows();
+            if (!silent) {
+              state.error = "Could not load the account-wide success-rate data.";
+              renderRows();
+            }
           });
       const actors = normalizeActors(await AAP_API.actorList());
       if (requestId !== state.requestId) return;
@@ -693,8 +727,10 @@
         }
       } else {
         const actorRows = new Array(actors.length);
-        state.rows = actors.map((item) => ({ actor: item, stats: null, failed: false }));
-        renderRows();
+        if (!silent) {
+          state.rows = actors.map((item) => ({ actor: item, stats: null, failed: false }));
+          renderRows();
+        }
         const actorPromise = AAP_API.pooled(actors, async (item, index) => {
           try {
             const row = { actor: item, stats: statsFor(await AAP_API.runStatistics(monthStartAt, [item.id])), failed: false };
@@ -707,9 +743,11 @@
           }
         }, (completed) => {
           if (requestId !== state.requestId) return;
-          state.completed = completed;
-          state.rows = actors.map((item, index) => actorRows[index] || { actor: item, stats: null, failed: false });
-          renderRows();
+          if (!silent) {
+            state.completed = completed;
+            state.rows = actors.map((item, index) => actorRows[index] || { actor: item, stats: null, failed: false });
+            renderRows();
+          }
         });
         const [actorResult] = await Promise.allSettled([actorPromise]);
         await totalTask;
@@ -717,7 +755,7 @@
         state.rows = actorResult.status === "fulfilled" ? actorResult.value.filter(Boolean) : [];
       }
     } catch (error) {
-      if (requestId === state.requestId) state.error = `Couldn't load debugging data${error?.message ? `: ${error.message}` : "."}`;
+      if (requestId === state.requestId && !silent) state.error = `Couldn't load debugging data${error?.message ? `: ${error.message}` : "."}`;
     } finally {
       if (requestId === state.requestId) {
         state.loading = false;
