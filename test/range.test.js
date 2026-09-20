@@ -24,6 +24,7 @@ assert.equal(range.monthEnd("2026-02"), "2026-02-28");
 assert.deepEqual({ ...range.niceScale(55) }, { max: 60, step: 10, ticks: 6 });
 assert.deepEqual({ ...range.niceScale(40) }, { max: 40, step: 5, ticks: 8 });
 assert.deepEqual({ ...range.niceScale(0.16) }, { max: 0.2, step: 0.05, ticks: 4 });
+assert.deepEqual({ ...range.niceScale(0.004) }, { max: 0.004, step: 0.001, ticks: 4 });
 assert.deepEqual({ ...range.niceScale(0) }, { max: 1, step: 0.2, ticks: 5 });
 
 const today = new Date().toISOString().slice(0, 10);
@@ -57,7 +58,7 @@ const data = range.aggregate(
       }, {
         actorId: "actor-c",
         name: "Actor C",
-        runs: { dailyStats: { "2026-01-31": { TOTAL: 2, RESULTS: 4 } } },
+        runs: { dailyStats: { "2026-01-31": { TOTAL: "2", RESULTS: "4" } } },
       }],
     },
     {

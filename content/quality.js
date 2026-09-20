@@ -4,6 +4,7 @@
   const OVERVIEW_CLASS = "aap-quality-overview-page";
   const HOST_CLASS = "aap-quality-overview";
   const MAX_CONCURRENT = 10;
+  const CACHE_CLEAR_KEY = "aap.cacheClearedAt";
 
   // Quality scores/recommendations rarely change; re-check them on the same
   // cadence as Monetization's breakdown reindex so a long-open tab doesn't
@@ -23,6 +24,7 @@
     completed: 0,
     requestId: 0,
     loadedAt: 0,
+    organization: null,
   };
 
   let host = null;
@@ -40,6 +42,20 @@
     state.rows = [];
     state.completed = 0;
     state.loadedAt = 0;
+    state.organization = null;
+  });
+
+  chrome.storage.onChanged?.addListener((changes, area) => {
+    if (area !== "local" || !changes[CACHE_CLEAR_KEY]) return;
+    state.requestId++;
+    state.loading = false;
+    state.error = null;
+    state.actors = [];
+    state.rows = [];
+    state.completed = 0;
+    state.loadedAt = 0;
+    state.organization = null;
+    renderRows();
   });
 
   // A closed-and-reopened tab loses all in-memory state, so on a fresh page
@@ -59,9 +75,9 @@
     try {
       await AAP_API.whenReady?.();
       if (state.requestId) return;
-      const scope = AAP_API.authScope?.() || "";
-      const cached = await AAP_CACHE.getView("quality", QUALITY_REFRESH_TTL_MS, scope);
+      const cached = await AAP_CACHE.getView("quality", QUALITY_REFRESH_TTL_MS, viewScope());
       if (!cached.hit || state.requestId) return;
+      state.organization = organizationScope();
       state.actors = cached.data.actors || [];
       state.rows = cached.data.rows || [];
       state.requestId = 1;
@@ -76,6 +92,14 @@
 
   function onOverviewRoute() {
     return ROUTE_RE.test(location.pathname) && !new URLSearchParams(location.search).has("actorId");
+  }
+
+  function organizationScope() {
+    return self.AAP_CONTEXT?.organizationKey?.() || "personal";
+  }
+
+  function viewScope() {
+    return `${organizationScope()}:${AAP_API.authScope?.() || ""}`;
   }
 
   function createElement(tag, className, text) {
@@ -669,8 +693,20 @@
     }
     if (empty) empty.dataset.aapQualityNative = "hidden";
     if (created) renderRows();
+    const organization = organizationScope();
+    if (state.organization !== organization) {
+      state.requestId++;
+      state.loading = false;
+      state.error = null;
+      state.actors = [];
+      state.rows = [];
+      state.completed = 0;
+      state.loadedAt = 0;
+      state.organization = organization;
+      renderRows();
+    }
     if (state.showOriginal || !restoreSettled) return;
-    if (!state.requestId) beginLoad(false);
+    if (!state.loadedAt) beginLoad(false);
     else if (Date.now() - state.loadedAt > QUALITY_REFRESH_TTL_MS) beginLoad(false, true);
   }
 
@@ -685,8 +721,9 @@
 
   async function beginLoad(force, silent = false) {
     if (state.loading) return;
-    if (!force && !silent && state.requestId) return;
+    if (!force && !silent && state.requestId && state.loadedAt) return;
     const requestId = ++state.requestId;
+    state.organization = organizationScope();
     state.loadedAt = Date.now();
     if (!silent) {
       state.loading = true;
@@ -704,7 +741,7 @@
       const rows = await loadActorRows(actors, requestId, silent);
       if (requestId !== state.requestId) return;
       if (silent) state.rows = rows;
-      AAP_CACHE.setView?.("quality", { actors: state.actors, rows: state.rows }, AAP_API.authScope?.() || "");
+      AAP_CACHE.setView?.("quality", { actors: state.actors, rows: state.rows }, viewScope());
     } catch (error) {
       if (requestId === state.requestId && !silent) state.error = `Couldn't load Actor quality data${error?.message ? `: ${error.message}` : "."}`;
     } finally {

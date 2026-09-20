@@ -15,10 +15,15 @@
   const AUTH_SCOPE_REPLAY_EVENT = "aap-request-auth-scope";
   const API_REQUEST_EVENT = "aap-api-request";
   const API_RESPONSE_EVENT = "aap-api-response";
+  const BACKEND_ORIGIN = "https://console-backend.apify.com";
+  const MAX_REQUEST_ID_LENGTH = 128;
+  const MAX_QUERY_LENGTH = 4096;
   let lastInfo = null;
   let lastToken = null;
   let lastAuthScope = null;
   const waitingRequests = [];
+  const waitingRequestIds = new Set();
+  const activeRequestIds = new Set();
 
   function hash(value) {
     let result = 2166136261;
@@ -32,7 +37,7 @@
   function parseInfo(url) {
     try {
       const u = new URL(url, location.origin);
-      if (!u.hostname.endsWith("console-backend.apify.com")) return null;
+      if (u.origin !== BACKEND_ORIGIN) return null;
       if (!u.pathname.includes("/actor-analytics/")) return null;
       // The console sends the native Actor filter as one comma-joined
       // `actorIds` param (it used to be repeated `actorIds[]=` params —
@@ -69,22 +74,59 @@
     lastToken = value;
     lastAuthScope = `account-${hash(value)}`;
     dispatchAuthScope();
-    while (waitingRequests.length) performRequest(waitingRequests.shift());
+    while (waitingRequests.length) {
+      const request = waitingRequests.shift();
+      waitingRequestIds.delete(request.id);
+      performRequest(request);
+    }
   }
 
   function dispatchResponse(id, response) {
     window.dispatchEvent(new CustomEvent(API_RESPONSE_EVENT, { detail: { id, ...response } }));
   }
 
+  const ACTOR_ANALYTICS_ENDPOINTS = new Set([
+    "monthly-marketing",
+    "actor-breakdown",
+    "profit-margin",
+    "run-statistics/monthly/all-users",
+    "shared-runs",
+    "user-count-statistics",
+    "costs-per-thousand-results",
+  ]);
+
   function allowedApiUrl(value) {
     try {
       const url = new URL(value);
-      if (url.origin !== "https://console-backend.apify.com") return null;
-      const allowed = url.pathname.startsWith("/actor-analytics/")
-        || url.pathname === "/actors/find-users-owned-actors-by-text"
-        || url.pathname.startsWith("/actor-quality/")
-        || url.pathname.startsWith("/actor/");
-      return allowed ? url : null;
+      if (url.origin !== BACKEND_ORIGIN || url.hash || url.search.length > MAX_QUERY_LENGTH) return null;
+      const actorAnalyticsPath = url.pathname.replace(/^\/actor-analytics\//, "");
+      if (url.pathname.startsWith("/actor-analytics/")) {
+        if (!ACTOR_ANALYTICS_ENDPOINTS.has(actorAnalyticsPath)) return null;
+      } else if (
+        url.pathname !== "/actors/find-users-owned-actors-by-text"
+        && !/^\/actor-quality\/(?:scores|praises-and-improvements|business-value-improvements)\/[^/]+$/.test(url.pathname)
+        && !/^\/actor\/[^/]+\/metrics$/.test(url.pathname)
+      ) {
+        return null;
+      }
+
+      const queryKeys = new Set(url.searchParams.keys());
+      const allowedQueryKeys = url.pathname === "/actors/find-users-owned-actors-by-text"
+        ? new Set(["text"])
+        : url.pathname === "/actor-analytics/monthly-marketing"
+          ? new Set(["monthStartAt", "actorIds", "portionOfMonthElapsed"])
+          : url.pathname === "/actor-analytics/shared-runs"
+            ? new Set(["actorIds", "tiers", "limit", "searchAfter", "searchBefore", "sort[finishedAt]"])
+            : url.pathname.startsWith("/actor-analytics/")
+              ? new Set(["month", "actorIds"])
+              : new Set();
+      if ([...queryKeys].some((key) => !allowedQueryKeys.has(key))) return null;
+      if ([...url.searchParams.values()].some((value) => value.length > 2048)) return null;
+      for (const key of ["month", "monthStartAt"]) {
+        const value = url.searchParams.get(key);
+        if (value && !/^\d{4}-\d{2}(?:-\d{2})?(?:T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z)?$/.test(value)) return null;
+      }
+      return url;
     } catch {
       return null;
     }
@@ -92,14 +134,20 @@
 
   async function performRequest(request) {
     const url = allowedApiUrl(request?.url);
-    if (!request?.id || !url) {
+    if (typeof request?.id !== "string" || request.id.length === 0 || request.id.length > MAX_REQUEST_ID_LENGTH || !url) {
       if (request?.id) dispatchResponse(request.id, { error: "Unsupported analytics request" });
       return;
     }
+    if (activeRequestIds.has(request.id)) {
+      return;
+    }
     if (!lastToken) {
+      if (waitingRequestIds.has(request.id)) return;
+      waitingRequestIds.add(request.id);
       waitingRequests.push(request);
       return;
     }
+    activeRequestIds.add(request.id);
     try {
       const response = await OrigFetch.call(window, url.href, {
         credentials: "include",
@@ -123,6 +171,8 @@
       dispatchResponse(request.id, { data });
     } catch (error) {
       dispatchResponse(request.id, { error: error?.message || String(error) });
+    } finally {
+      activeRequestIds.delete(request.id);
     }
   }
 
@@ -134,7 +184,7 @@
     return OrigOpen.apply(this, arguments);
   };
   XMLHttpRequest.prototype.setRequestHeader = function (name, value) {
-    if (name && name.toLowerCase() === "authorization" && this.__aptUrl?.includes("console-backend.apify.com")) {
+    if (name && name.toLowerCase() === "authorization" && allowedApiUrl(this.__aptUrl)) {
       announceToken(value);
     }
     return OrigSetHeader.apply(this, arguments);
@@ -146,7 +196,7 @@
       const url = typeof input === "string" ? input : input && input.url;
       announceSeen(parseInfo(url));
       const headers = init?.headers || (typeof input === "string" ? null : input?.headers);
-      if (url && headers && url.includes("console-backend.apify.com")) {
+      if (url && headers && allowedApiUrl(url)) {
         const auth = new Headers(headers).get("authorization");
         if (auth) announceToken(auth);
       }

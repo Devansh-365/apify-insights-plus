@@ -1,5 +1,6 @@
 (function () {
   const CACHE_CLEAR_KEY = "aap.cacheClearedAt";
+  const CACHE_PREFIXES = ["aap.breakdown.", "aap.api.", "aap.view."];
 
   // ---- Views: main <-> settings ----
   const mainView = document.getElementById("view-main");
@@ -37,10 +38,15 @@
 
     const body = document.getElementById("cache-body");
     body.replaceChildren();
+    const viewCount = Object.keys(all).filter((key) => key.startsWith("aap.view.")).length;
     if (!entries.length) {
       body.className = "muted";
       const apiCount = Object.keys(all).filter((key) => key.startsWith("aap.api.")).length;
-      body.textContent = apiCount ? `${apiCount} cached API responses.` : "No cached analytics data yet.";
+      const cached = [
+        apiCount ? `${apiCount} cached API responses` : "",
+        viewCount ? `${viewCount} cached view${viewCount === 1 ? "" : "s"}` : "",
+      ].filter(Boolean);
+      body.textContent = cached.length ? `${cached.join("; ")}.` : "No cached analytics data yet.";
       return;
     }
     body.className = "";
@@ -64,11 +70,18 @@
       note.textContent = `${apiCount} cached API responses`;
       body.appendChild(note);
     }
+    if (viewCount) {
+      const note = document.createElement("div");
+      note.className = "muted";
+      note.style.marginTop = "6px";
+      note.textContent = `${viewCount} cached view${viewCount === 1 ? "" : "s"}`;
+      body.appendChild(note);
+    }
   }
 
   document.getElementById("clear-cache").addEventListener("click", async () => {
     const all = await chrome.storage.local.get(null);
-    const keys = Object.keys(all).filter((k) => k.startsWith("aap.breakdown.") || k.startsWith("aap.api."));
+    const keys = Object.keys(all).filter((key) => CACHE_PREFIXES.some((prefix) => key.startsWith(prefix)));
     if (keys.length) await chrome.storage.local.remove(keys);
     await chrome.storage.local.set({ [CACHE_CLEAR_KEY]: Date.now() });
     loadCacheSummary();

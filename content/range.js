@@ -10,6 +10,8 @@
   const CACHE_CLEAR_KEY = "aap.cacheClearedAt";
   const HISTORICAL_CACHE_TTL_MS = 15 * 60 * 1000;
   const CURRENT_MONTH_CACHE_TTL_MS = 60 * 1000;
+  const PARTIAL_RETRY_MS = 30 * 1000;
+  const MAX_MEMORY_CACHE_ENTRIES = 8;
   const CONTROL_CLASS = "aap-range-selector";
   const MODE_CLASS = "aap-range-mode";
   const ORIGINAL_MODE_CLASS = "aap-monetization-original-mode";
@@ -59,6 +61,7 @@
     view: "custom",
     data: null,
     rawData: null,
+    partial: null,
     error: null,
     loading: false,
     loadedKey: null,
@@ -184,6 +187,7 @@
   function resetRangeData() {
     state.data = null;
     state.rawData = null;
+    state.partial = null;
     state.error = null;
     state.loadedKey = null;
     state.retryAt = 0;
@@ -519,6 +523,7 @@
     if (controlsStatus) {
       if (!custom) controlsStatus.textContent = "";
       else if (state.error) controlsStatus.textContent = "Range could not be loaded";
+      else if (state.partial) controlsStatus.textContent = `${state.partial.failedCount} Actor${state.partial.failedCount === 1 ? "" : "s"} unavailable — retrying`;
       else if (state.loading) controlsStatus.textContent = "Loading range…";
       else if (validRange(state.range) && state.data) controlsStatus.textContent = countLabel(state.data.days.length);
       else controlsStatus.textContent = "";
@@ -822,7 +827,7 @@
 
   function axisValue(value, definition, step = 1) {
     if (definition.key === "money" || definition.key === "cost") {
-      const decimals = value === 0 ? 2 : step < 1 ? 2 : step % 1 ? 1 : 0;
+      const decimals = value === 0 ? 2 : step >= 1 ? (step % 1 ? 1 : 0) : step >= 0.01 ? 2 : Math.min(6, Math.max(3, Math.ceil(-Math.log10(step)) + 1));
       return `$${value.toFixed(decimals)}`;
     }
     return formatCount(value);
@@ -1072,12 +1077,18 @@
     if (definition.key === "money") {
       const eligibleActors = Object.values(row.actorStats || {}).filter((actor) => Number(actor.revenue) > 0 || Number(actor.runs) > 0);
       if (!eligibleActors.length) {
+        if (state.partial) rangeTooltip.appendChild(createElement("div", "aap-range-tooltip-note", "Some Actor data could not be loaded; retrying."));
         rangeTooltip.appendChild(createElement("div", "aap-range-tooltip-note", "No revenue or runs this day."));
         return true;
       }
       const rankedActors = actorRanking(data);
+      const revenueRankedActors = actorRevenueRanking(data);
       const visibleActorIds = new Set(rankedActors.slice(0, tooltipActorCount).map(([actorId]) => actorId));
       const actors = eligibleActors.filter((actor) => visibleActorIds.has(actor.actorId));
+
+      if (state.partial) {
+        rangeTooltip.appendChild(createElement("div", "aap-range-tooltip-note", "Some Actor data could not be loaded; retrying."));
+      }
 
       const hint = createElement(
         "div",
@@ -1108,7 +1119,7 @@
         const rowElement = document.createElement("tr");
         const nameCell = document.createElement("td");
         const dot = createElement("span", "aap-range-dot");
-        dot.style.backgroundColor = actorColor(actor.actorId, actorRevenueRanking(data));
+        dot.style.backgroundColor = actorColor(actor.actorId, revenueRankedActors);
         nameCell.append(dot, document.createTextNode(actor.name || actor.actorId));
         rowElement.appendChild(nameCell);
         for (const column of ACTOR_TOOLTIP_COLUMNS.slice(1)) {
@@ -1238,10 +1249,15 @@
     if (Date.now() < state.retryAt) return;
     const cached = memoryCache.get(key);
     const fresh = cached && Date.now() - cached.updatedAt < rangeCacheTtl(state.range);
+    if (cached && fresh) {
+      memoryCache.delete(key);
+      memoryCache.set(key, cached);
+    }
     if (key === state.loadedKey && fresh) return;
     state.loadedKey = key;
     state.loading = true;
     state.error = null;
+    state.partial = null;
     renderRangeView();
     const loadId = ++state.loadId;
     try {
@@ -1250,10 +1266,15 @@
         ? cached.data
         : await AAP_API.rangeData(dates.start, dates.end, state.actorIds);
       if (loadId !== state.loadId || key !== dataKey()) return;
-      memoryCache.set(key, { data: rawData, updatedAt: Date.now() });
+      if (!rawData.partial) {
+        memoryCache.delete(key);
+        memoryCache.set(key, { data: rawData, updatedAt: Date.now() });
+        while (memoryCache.size > MAX_MEMORY_CACHE_ENTRIES) memoryCache.delete(memoryCache.keys().next().value);
+      }
       state.rawData = rawData;
       state.data = AAPR.group(rawData, state.grouping);
-      state.retryAt = 0;
+      state.partial = rawData.partial || null;
+      state.retryAt = rawData.partial ? Date.now() + PARTIAL_RETRY_MS : 0;
     } catch (error) {
       if (loadId !== state.loadId || key !== dataKey()) return;
       state.error = error;

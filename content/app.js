@@ -40,6 +40,7 @@
   const UNASSIGNED_COLOR = "#6b7280";
   const TOP_N = PALETTE.length;
   const TOOLTIP_ACTOR_COUNT_KEY = "aap.tooltipActorCount";
+  const CACHE_CLEAR_KEY = "aap.cacheClearedAt";
   const DEFAULT_TOOLTIP_ACTOR_COUNT = 20;
   const MAX_TOOLTIP_ACTOR_COUNT = 100;
   const METRICS = [
@@ -71,6 +72,7 @@
   // activity). Matches the cache TTL — re-running
   // sooner would just be served the same fresh cache and no-op.
   const BREAKDOWN_REFRESH_MS = 15 * 60 * 1000;
+  const PARTIAL_RETRY_MS = 30 * 1000;
 
   const state = {
     month: null, // "2026-07-01", from the page's own requests
@@ -147,9 +149,16 @@
 
   if (typeof chrome !== "undefined") {
     chrome.storage.onChanged?.addListener((changes, area) => {
-      if (area !== "local" || !changes[TOOLTIP_ACTOR_COUNT_KEY]) return;
-      tooltipActorCount = normalizeTooltipActorCount(changes[TOOLTIP_ACTOR_COUNT_KEY].newValue);
-      if (tooltipDay != null) renderTooltip();
+      if (area !== "local") return;
+      if (changes[CACHE_CLEAR_KEY]) {
+        cacheClearGeneration++;
+        loadedKey = null;
+        resetChartForScope();
+      }
+      if (changes[TOOLTIP_ACTOR_COUNT_KEY]) {
+        tooltipActorCount = normalizeTooltipActorCount(changes[TOOLTIP_ACTOR_COUNT_KEY].newValue);
+        if (tooltipDay != null) renderTooltip();
+      }
     });
   }
 
@@ -408,7 +417,8 @@
     // cache has gone stale) so a long-open tab's per-Actor breakdown keeps up
     // with today — see BREAKDOWN_REFRESH_MS. loadAndRender stamps
     // breakdownRefreshedAt itself, which also covers the initial load.
-    if (key && lastData && !lastData.indexing && Date.now() - breakdownRefreshedAt > BREAKDOWN_REFRESH_MS) {
+    const refreshInterval = lastData?.partial ? PARTIAL_RETRY_MS : BREAKDOWN_REFRESH_MS;
+    if (key && lastData && !lastData.indexing && Date.now() - breakdownRefreshedAt > refreshInterval) {
       loadAndRender(state.month, state.actorIds).catch(() => {});
       return;
     }
@@ -450,6 +460,7 @@
   let dayMetricsFetchedAt = 0;
   let dayMetricsFetching = false;
   let breakdownRefreshedAt = 0;
+  let cacheClearGeneration = 0;
 
   AAP_API.onTokenChange?.(() => {
     // A token change means the authenticated account may have changed. Drop
@@ -469,29 +480,32 @@
     syncOverlayPage();
   }
 
-  // True when some day has revenue in the account-wide totals but no rows in
-  // the per-Actor breakdown — the signature of a breakdown indexed before
-  // that day's first paid activity (typically: a cache written earlier today,
-  // or right after the UTC day rolled over). Any day with real revenue must
-  // have at least one earning Actor, so this can't false-positive on a
-  // legitimately quiet day.
-  function breakdownMissingRevenueDay(daily, dayMetrics) {
-    return Object.entries(dayMetrics || {}).some(
-      ([day, m]) => m.revenue > 0 && !daily?.[day]?.length,
-    );
+  // True when the account-wide totals contain more activity than the cached
+  // per-Actor rows. This catches both a newly paid Actor and an Actor that ran
+  // without revenue after a fresh cache was written.
+  function breakdownMissingActivityDay(daily, dayMetrics) {
+    return Object.entries(dayMetrics || {}).some(([day, metrics]) => {
+      const rows = daily?.[day] || [];
+      const indexedRevenue = rows.reduce((sum, row) => sum + (Number(row.revenue) || 0), 0);
+      const indexedRuns = rows.reduce((sum, row) => sum + (Number(row.runs) || 0), 0);
+      const revenue = Number(metrics?.revenue) || 0;
+      const runs = Number(metrics?.runs) || 0;
+      return revenue > indexedRevenue + 0.000001 || runs > indexedRuns;
+    });
   }
 
   async function loadAndRender(month, actorIds) {
     const overlay = ensureOverlay();
     if (!overlay) return;
     const loadKey = buildScopeKey(month, actorIds);
+    const loadGeneration = cacheClearGeneration;
     breakdownRefreshedAt = Date.now(); // pace the poll's periodic re-run
     // Publish loading state before the cache and network awaits. This keeps a
     // visible status in the toolbar even while the native chart remains the
     // safe fallback underneath the custom renderer.
-    setData({ month, loading: true, error: null, progress: null });
+    setData({ month, loading: true, error: null, partial: null, progress: null });
     await AAP_API.whenReady?.();
-    if (loadKey !== scopeKey()) return;
+    if (loadGeneration !== cacheClearGeneration || loadKey !== scopeKey()) return;
     // Use a token-derived namespace without storing the token itself. This
     // prevents a cached personal account view from being shown after a
     // logout/login switch in the same browser profile.
@@ -504,29 +518,27 @@
       // A cache failure should only cost us the cache; live API data can still
       // render normally.
     }
-    if (loadKey !== scopeKey()) return;
+    if (loadGeneration !== cacheClearGeneration || loadKey !== scopeKey()) return;
     let daily = cached?.daily || null;
     let actorCount = cached?.actorCount ?? null;
     let indexedAt = cached?.updatedAt ?? null;
     let indexing = !cached || cached.stale;
     if (daily) colorByActorId = buildColorMap(daily);
 
-    if (cached?.dayMetrics) setData({ month, daily, actorCount, indexedAt, indexing, loading: true, dayMetrics: cached.dayMetrics, progress: null });
-    else setData({ month, daily, actorCount, indexedAt, indexing, loading: true, progress: null });
+    if (cached?.dayMetrics) setData({ month, daily, actorCount, indexedAt, indexing, loading: true, partial: null, dayMetrics: cached.dayMetrics, progress: null });
+    else setData({ month, daily, actorCount, indexedAt, indexing, loading: true, partial: null, progress: null });
 
     // Always fetch the cheap day totals (scoped to the native Actor filter,
     // if any) so the chart is accurate even while (or instead of) a full
     // re-index runs. Shares refreshDayMetrics with the periodic poll so the
     // two never race.
     const freshDayMetrics = await refreshDayMetrics(month, actorIds);
-    if (loadKey !== scopeKey()) return;
+    if (loadGeneration !== cacheClearGeneration || loadKey !== scopeKey()) return;
     let dayMetrics = freshDayMetrics || cached?.dayMetrics || lastData?.dayMetrics || null;
 
-    // A cache can be fresh by TTL yet already wrong: indexed before today's
-    // first paid run, it has no per-Actor rows for a day the just-fetched
-    // account totals show revenue on, and the tooltip would claim "No paid
-    // Actor activity" for a day that plainly earned. Re-index despite the TTL.
-    if (!indexing && breakdownMissingRevenueDay(daily, dayMetrics)) indexing = true;
+    // A cache can be fresh by TTL yet already wrong: indexed before a new paid
+    // or run-only Actor became active. Re-index despite the TTL.
+    if (!indexing && breakdownMissingActivityDay(daily, dayMetrics)) indexing = true;
 
     if (!indexing) {
       setData({ loading: false, indexing: false, progress: null });
@@ -541,8 +553,8 @@
         .map((item) => ({
           actorId: item.actor?._id,
           actorName: item.actor?.title || item.actor?.name || item.actor?._id,
-          totalRevenueUsd: item.earningsStats?.totalRevenueUsd ?? 0,
-          totalCostUsd: item.earningsStats?.totalCostUsd ?? 0,
+          totalRevenueUsd: Number(item.earningsStats?.totalRevenueUsd) || 0,
+          totalCostUsd: Number(item.earningsStats?.totalCostUsd) || 0,
         }))
         .filter((a) => a.actorId);
 
@@ -560,7 +572,7 @@
           setData({ month, daily, actorCount: actors.length, indexedAt, indexing: true, dayMetrics, progress: { done, total } });
         },
       );
-      if (myRun !== indexRun) return; // a newer month started loading
+      if (myRun !== indexRun || loadGeneration !== cacheClearGeneration) return; // a newer month or cache generation started loading
 
       daily = buildDailyIndex(perActor);
       colorByActorId = buildColorMap(daily);
@@ -574,7 +586,8 @@
       // indexing:false looks identical to a clean run. Only cache complete
       // passes; a partial one still renders (better than nothing) but the
       // next page load retries instead of serving stale wrong data.
-      const failedCount = perActor.filter((e) => e === null).length;
+      const failedCount = perActor.failures?.length || perActor.filter((e) => e === null).length;
+      const partial = failedCount ? { failedCount } : null;
       if (failedCount === 0) {
         try {
           await AAP_CACHE.set(month, scope, { daily, actorCount, dayMetrics, filtered: actorIds.length > 0 });
@@ -583,7 +596,7 @@
           // correct chart in the current tab.
         }
       }
-      setData({ month, daily, actorCount, indexedAt, indexing: false, dayMetrics, progress: null });
+      setData({ month, daily, actorCount, indexedAt, indexing: false, partial, dayMetrics, progress: null });
     } catch (err) {
       if (myRun !== indexRun) return;
       setData({ month, daily, actorCount, indexedAt, indexing: false, dayMetrics, progress: null, error: String(err) });
@@ -607,14 +620,15 @@
     for (const day of days) {
       const m = margin?.dailyProfitMarginStats?.[day]?.payingUsersUsd;
       const r = runs?.dailyStats?.[day];
+      const totalRuns = Number(r?.TOTAL) || 0;
       out[day] = {
-        revenue: m?.revenueUsd ?? 0,
-        cost: m?.costUsd ?? 0,
-        profit: m?.profitUsd ?? 0,
-        margin: m?.margin ?? null,
-        runs: r?.TOTAL ?? 0,
-        results: r?.RESULTS ?? 0,
-        successRate: r?.TOTAL ? r.SUCCEEDED / r.TOTAL : null,
+        revenue: Number(m?.revenueUsd) || 0,
+        cost: Number(m?.costUsd) || 0,
+        profit: Number(m?.profitUsd) || 0,
+        margin: m?.margin == null ? null : Number(m.margin) || 0,
+        runs: totalRuns,
+        results: Number(r?.RESULTS) || 0,
+        successRate: totalRuns ? Number(r.SUCCEEDED) / totalRuns : null,
       };
     }
     return out;
@@ -647,13 +661,13 @@
         const row = {
           actorId: actor.actorId,
           name: actor.actorName,
-          revenue: m?.revenueUsd ?? 0,
-          cost: m?.costUsd ?? 0,
-          profit: m?.profitUsd ?? 0,
-          margin: m?.margin ?? null,
-          runs: r?.TOTAL ?? 0,
-          results: r?.RESULTS ?? 0,
-          successRate: r && r.TOTAL ? r.SUCCEEDED / r.TOTAL : null,
+          revenue: Number(m?.revenueUsd) || 0,
+          cost: Number(m?.costUsd) || 0,
+          profit: Number(m?.profitUsd) || 0,
+          margin: m?.margin == null ? null : Number(m.margin) || 0,
+          runs: Number(r?.TOTAL) || 0,
+          results: Number(r?.RESULTS) || 0,
+          successRate: r && Number(r.TOTAL) ? Number(r.SUCCEEDED) / Number(r.TOTAL) : null,
         };
         // Show any Actor that generated revenue or ran at least once. This
         // keeps run-only Actors available in the tooltip as well.
@@ -671,10 +685,12 @@
     const totals = new Map();
     for (const rows of Object.values(daily)) {
       for (const row of rows) {
-        totals.set(row.actorId, (totals.get(row.actorId) || 0) + row.revenue);
+        totals.set(row.actorId, (totals.get(row.actorId) || 0) + (Number(row.revenue) || 0));
       }
     }
-    const ranked = [...totals.entries()].sort((a, b) => b[1] - a[1]);
+    const ranked = [...totals.entries()]
+      .filter(([, revenue]) => revenue > 0)
+      .sort((a, b) => b[1] - a[1]);
     const map = new Map();
     ranked.slice(0, TOP_N).forEach(([actorId], i) => map.set(actorId, PALETTE[i]));
     return map;
@@ -724,7 +740,7 @@
   // a step > 51.4, whose next nice value is 100, blowing the axis out to 700,
   // nearly double the tallest bar.
   function niceScale(maxValue) {
-    if (maxValue <= 0) return { max: TICK_TARGET, ticks: TICK_TARGET };
+    if (maxValue <= 0) return { max: TICK_TARGET, step: 1, ticks: TICK_TARGET };
     const rawStep = maxValue / TICK_TARGET;
     const mag = Math.pow(10, Math.floor(Math.log10(rawStep)));
     const norm = rawStep / mag;
@@ -733,7 +749,18 @@
     const niceNorm = norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10;
     const step = niceNorm * mag;
     const ticks = Math.max(1, Math.ceil(maxValue / step));
-    return { max: step * ticks, ticks };
+    return { max: step * ticks, step, ticks };
+  }
+
+  function axisMoney(value, step) {
+    const decimals = value === 0
+      ? 2
+      : step >= 1
+        ? (step % 1 ? 1 : 0)
+        : step >= 0.01
+          ? 2
+          : Math.min(6, Math.max(3, Math.ceil(-Math.log10(step)) + 1));
+    return `$${value.toFixed(decimals)}`;
   }
 
   function renderChart() {
@@ -750,6 +777,8 @@
     if (status) {
       if (lastData.error) {
         status.textContent = `Couldn't load Actor data (${lastData.error}).`;
+      } else if (lastData.partial) {
+        status.textContent = `${lastData.partial.failedCount} Actor${lastData.partial.failedCount === 1 ? "" : "s"} unavailable; retrying…`;
       } else if (lastData.progress) {
         status.textContent = `Indexing Actors… ${lastData.progress.done}/${lastData.progress.total}`;
       } else if (lastData.indexing) {
@@ -798,7 +827,7 @@
     // One metric owns the scale, so every point uses the same unit and there
     // is no second axis that can become misleading or unreadable.
     const dataMax = (key) => Math.max(1, ...days.map((d) => metricValue(d, key)));
-    const { max: primaryMax, ticks } = niceScale(dataMax(metricDefinition.key));
+    const { max: primaryMax, step, ticks } = niceScale(dataMax(metricDefinition.key));
 
     // Canvas 2D's `font` has no "inherit" keyword (unlike CSS) — an invalid
     // value here is silently dropped, leaving the browser's ~10px default,
@@ -814,7 +843,7 @@
     let labelWidth = 0;
     for (let i = 0; i <= ticks; i++) {
       const value = primaryMax * (i / ticks);
-      const label = showBars ? AAPF.money(value) : AAPF.compact(value);
+      const label = showBars ? axisMoney(value, step) : AAPF.compact(value);
       labelWidth = Math.max(labelWidth, ctx.measureText(label).width);
     }
     const leftPad = Math.ceil(labelWidth) + 16;
@@ -839,7 +868,7 @@
       ctx.fillStyle = axisLabelColor;
       ctx.textAlign = "right";
       const axisValue = primaryMax * frac;
-      ctx.fillText(showBars ? AAPF.money(axisValue) : AAPF.compact(axisValue), leftPad - 8, y);
+      ctx.fillText(showBars ? axisMoney(axisValue, step) : AAPF.compact(axisValue), leftPad - 8, y);
     }
 
     // x-axis labels: thin to a clean day step (every 1/2/4/7/14 days) like
@@ -874,7 +903,7 @@
         const grouped = new Map();
         for (const row of lastData.daily?.[day] || []) {
           const key = colorByActorId.get(row.actorId) || UNASSIGNED_COLOR;
-          grouped.set(key, (grouped.get(key) || 0) + (row.revenue || 0));
+          grouped.set(key, (grouped.get(key) || 0) + (Number(row.revenue) || 0));
         }
         const accounted = [...grouped.values()].reduce((sum, value) => sum + value, 0);
         const unassigned = Math.max(0, total - accounted);
@@ -1082,6 +1111,7 @@
     html += `<span>Results <b>${AAPF.compact(dm?.results ?? 0)}</b></span>`;
     html += `<span>Success <b>${dm?.successRate != null ? AAPF.pct(dm.successRate) : "–"}</b></span>`;
     html += "</div>";
+    if (lastData.partial) html += `<div class="aap-tt-note">Some Actor data could not be loaded; retrying.</div>`;
 
     // Include Actors that earned revenue or ran at least once on this day.
     // The setting limits the highest-ranked Actors across the loaded month;

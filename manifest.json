@@ -36,6 +36,7 @@
         "https://console.apify.com/*"
       ],
       "js": [
+        "lib/context.js",
         "lib/format.js",
         "lib/range.js",
         "lib/api.js",

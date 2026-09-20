@@ -4,6 +4,7 @@
   const OVERVIEW_CLASS = "aap-debugging-overview-page";
   const HOST_CLASS = "aap-debugging-overview";
   const MAX_RUNS_PER_PAGE = 100;
+  const CACHE_CLEAR_KEY = "aap.cacheClearedAt";
 
   // Matches lib/api.js's cacheTtl(): current-month data settles quickly and
   // is worth re-checking every minute; historical months are effectively
@@ -33,6 +34,7 @@
     runsNextPageToken: null,
     runsLoading: false,
     runsError: null,
+    organization: null,
   };
 
   let host = null;
@@ -53,6 +55,28 @@
     state.runs = [];
     state.runsNextPageToken = null;
     state.loadedAt = 0;
+    state.organization = null;
+  });
+
+  chrome.storage.onChanged?.addListener((changes, area) => {
+    if (area !== "local" || !changes[CACHE_CLEAR_KEY]) return;
+    state.requestId++;
+    state.contextKey = null;
+    state.loading = false;
+    state.error = null;
+    state.actors = [];
+    state.rows = [];
+    state.total = null;
+    state.completed = 0;
+    state.loadedAt = 0;
+    state.selectedActorId = null;
+    state.runs = [];
+    state.runsTotal = null;
+    state.runsNextPageToken = null;
+    state.runsLoading = false;
+    state.runsError = null;
+    state.organization = null;
+    renderRows();
   });
 
   // A closed-and-reopened tab loses all in-memory state, so on a fresh page
@@ -76,9 +100,9 @@
       await AAP_API.whenReady?.();
       if (state.requestId || currentActorId()) return;
       const month = currentMonthStartAt();
-      const scope = AAP_API.authScope?.() || "";
-      const cached = await AAP_CACHE.getView("debugging", refreshTtl(month), `${month}:${scope}`);
+      const cached = await AAP_CACHE.getView("debugging", refreshTtl(month), viewScope(month));
       if (!cached.hit || state.requestId || currentActorId()) return;
+      state.organization = organizationScope();
       state.contextKey = contextKey(month, null);
       state.selectedActorId = null;
       state.monthStartAt = month;
@@ -281,7 +305,15 @@
   }
 
   function contextKey(monthStartAt, actor) {
-    return `${monthStartAt}|${actor || ""}`;
+    return `${organizationScope()}|${monthStartAt}|${actor || ""}`;
+  }
+
+  function organizationScope() {
+    return self.AAP_CONTEXT?.organizationKey?.() || "personal";
+  }
+
+  function viewScope(month) {
+    return `${organizationScope()}:${month}:${AAP_API.authScope?.() || ""}`;
   }
 
   function sortedRows() {
@@ -797,7 +829,7 @@
           actors: state.actors,
           rows: state.rows,
           total: state.total,
-        }, `${monthStartAt}:${AAP_API.authScope?.() || ""}`);
+        }, viewScope(monthStartAt));
       }
     } catch (error) {
       if (requestId === state.requestId && !silent) state.error = `Couldn't load debugging data${error?.message ? `: ${error.message}` : "."}`;

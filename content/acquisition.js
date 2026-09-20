@@ -4,6 +4,7 @@
   const OVERVIEW_CLASS = "aap-acquisition-overview-page";
   const HOST_CLASS = "aap-acquisition-overview";
   const MAX_CONCURRENT = 10;
+  const CACHE_CLEAR_KEY = "aap.cacheClearedAt";
 
   // Matches lib/api.js's cacheTtl(): current-month data settles quickly and
   // is worth re-checking every minute; historical months are effectively
@@ -27,6 +28,7 @@
     totalLoaded: false,
     requestId: 0,
     loadedAt: 0,
+    organization: null,
   };
 
   let host = null;
@@ -45,6 +47,22 @@
     state.actors = [];
     state.rows = [];
     state.loadedAt = 0;
+    state.organization = null;
+  });
+
+  chrome.storage.onChanged?.addListener((changes, area) => {
+    if (area !== "local" || !changes[CACHE_CLEAR_KEY]) return;
+    state.requestId++;
+    state.loading = false;
+    state.monthStartAt = null;
+    state.total = null;
+    state.totalPrevious = null;
+    state.totalLoaded = false;
+    state.actors = [];
+    state.rows = [];
+    state.loadedAt = 0;
+    state.organization = null;
+    renderRows();
   });
 
   // A closed-and-reopened tab loses all in-memory state, so on a fresh page
@@ -66,10 +84,10 @@
       await AAP_API.whenReady?.();
       if (state.requestId) return;
       const month = monthStartAt();
-      const scope = AAP_API.authScope?.() || "";
-      const cached = await AAP_CACHE.getView("acquisition", refreshTtl(month), `${month}:${scope}`);
+      const cached = await AAP_CACHE.getView("acquisition", refreshTtl(month), viewScope(month));
       if (!cached.hit || state.requestId) return;
       state.monthStartAt = month;
+      state.organization = organizationScope();
       state.actors = cached.data.actors || [];
       state.rows = cached.data.rows || [];
       state.total = cached.data.total ?? null;
@@ -173,6 +191,14 @@
     if (/^\d{4}-\d{2}$/.test(period || "")) return `${period}-01T00:00:00.000Z`;
     const now = new Date();
     return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}-01T00:00:00.000Z`;
+  }
+
+  function organizationScope() {
+    return self.AAP_CONTEXT?.organizationKey?.() || "personal";
+  }
+
+  function viewScope(month) {
+    return `${organizationScope()}:${month}:${AAP_API.authScope?.() || ""}`;
   }
 
   function monthLabel(value) {
@@ -532,6 +558,20 @@
       created = true;
     }
     if (created) renderRows();
+    const organization = organizationScope();
+    if (state.organization !== organization) {
+      state.requestId++;
+      state.loading = false;
+      state.monthStartAt = null;
+      state.total = null;
+      state.totalPrevious = null;
+      state.totalLoaded = false;
+      state.actors = [];
+      state.rows = [];
+      state.loadedAt = 0;
+      state.organization = organization;
+      renderRows();
+    }
     const month = monthStartAt();
     if (state.showOriginal || !restoreSettled) return;
     if (!state.requestId || state.monthStartAt !== month) { beginLoad(month, false); return; }
@@ -550,6 +590,7 @@
     if (state.loading && state.monthStartAt === month) return;
     if (!force && !silent && state.requestId && state.monthStartAt === month) return;
     const requestId = ++state.requestId;
+    state.organization = organizationScope();
     state.loadedAt = Date.now();
     if (!silent) {
       state.loading = true;
@@ -590,7 +631,7 @@
         total: state.total,
         totalPrevious: state.totalPrevious,
         totalLoaded: state.totalLoaded,
-      }, `${month}:${AAP_API.authScope?.() || ""}`);
+      }, viewScope(month));
     } catch (error) {
       if (requestId === state.requestId && !silent) state.error = `Couldn't load acquisition data${error?.message ? `: ${error.message}` : "."}`;
     } finally {
