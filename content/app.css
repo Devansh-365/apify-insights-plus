@@ -108,6 +108,9 @@
   color: #e5e7eb;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
   min-width: 200px;
+  max-width: min(760px, calc(100vw - 16px));
+  max-height: calc(100vh - 24px);
+  overflow: auto;
 }
 
 .aap-tooltip.aap-tt-pinned {
@@ -537,7 +540,8 @@
   z-index: 10000;
   display: none;
   box-sizing: border-box;
-  max-width: min(520px, calc(100vw - 16px));
+  max-width: min(760px, calc(100vw - 16px));
+  max-height: calc(100vh - 24px);
   padding: 7px 9px;
   border: 1px solid var(--aap-page-border, var(--color-neutral-border, rgba(255, 255, 255, 0.15)));
   border-radius: 6px;
@@ -547,6 +551,96 @@
   font-size: 11px;
   pointer-events: none;
   white-space: normal;
+  overflow: auto;
+}
+
+.aap-range-tooltip.aap-range-tooltip-pinned {
+  pointer-events: auto;
+  border-color: rgba(45, 212, 191, 0.5);
+}
+
+.aap-range-tooltip-pin-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--aap-page-border, rgba(255, 255, 255, 0.1));
+  color: var(--aap-page-muted, #9ca3af);
+  font-size: 10px;
+}
+
+.aap-range-tooltip-close {
+  margin-left: auto;
+  padding: 0 2px;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.aap-range-tooltip-subtitle {
+  margin-bottom: 4px;
+  color: var(--aap-page-muted, #9ca3af);
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.aap-range-tooltip-note {
+  color: var(--aap-page-muted, #9ca3af);
+  font-size: 12px;
+}
+
+.aap-range-tooltip-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.aap-range-tooltip-table th,
+.aap-range-tooltip-table td {
+  padding: 2px 0;
+  white-space: nowrap;
+}
+
+.aap-range-tooltip-table th {
+  padding-left: 12px;
+  color: var(--aap-page-muted, #6b7280);
+  font-size: 10px;
+  font-weight: 500;
+  text-align: right;
+  user-select: none;
+}
+
+.aap-range-tooltip-pinned .aap-range-tooltip-table th {
+  cursor: pointer;
+}
+
+.aap-range-tooltip-pinned .aap-range-tooltip-table th:hover,
+.aap-range-tooltip-table th.aap-range-tooltip-sorted {
+  color: var(--aap-page-text, #f3f4f6);
+}
+
+.aap-range-tooltip-table th:first-child,
+.aap-range-tooltip-table td:first-child {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.aap-range-tooltip-table td:not(:first-child) {
+  padding-left: 12px;
+  text-align: right;
+}
+
+.aap-range-tooltip-table td .aap-range-dot {
+  display: inline-block;
+  margin-right: 6px;
+  vertical-align: -1px;
 }
 
 .aap-range-tooltip-period {

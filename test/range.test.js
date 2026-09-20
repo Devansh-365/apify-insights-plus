@@ -21,6 +21,10 @@ assert.equal(range.isDate("2026-02-28"), true);
 assert.equal(range.isMonth("2026-02"), true);
 assert.equal(range.isMonth("2026-2"), false);
 assert.equal(range.monthEnd("2026-02"), "2026-02-28");
+assert.deepEqual({ ...range.niceScale(55) }, { max: 60, step: 10, ticks: 6 });
+assert.deepEqual({ ...range.niceScale(40) }, { max: 40, step: 5, ticks: 8 });
+assert.deepEqual({ ...range.niceScale(0.16) }, { max: 0.2, step: 0.05, ticks: 4 });
+assert.deepEqual({ ...range.niceScale(0) }, { max: 1, step: 0.2, ticks: 5 });
 
 const today = new Date().toISOString().slice(0, 10);
 const tomorrow = new Date(`${today}T00:00:00Z`);
@@ -44,6 +48,16 @@ const data = range.aggregate(
         actorId: "actor-a",
         name: "Actor A",
         margin: { dailyProfitMarginStats: { "2026-01-31": { payingUsersUsd: { revenueUsd: 6, costUsd: 1, profitUsd: 5, margin: 5 / 6 } } } },
+        runs: { dailyStats: { "2026-01-31": { TOTAL: 2, RESULTS: 3 } } },
+      }, {
+        actorId: "actor-b",
+        name: "Actor B",
+        margin: { dailyProfitMarginStats: { "2026-01-31": { payingUsersUsd: { revenueUsd: 4, costUsd: 1, profitUsd: 3, margin: 0.75 } } } },
+        runs: { dailyStats: { "2026-01-31": { TOTAL: 1, RESULTS: 2 } } },
+      }, {
+        actorId: "actor-c",
+        name: "Actor C",
+        runs: { dailyStats: { "2026-01-31": { TOTAL: 2, RESULTS: 4 } } },
       }],
     },
     {
@@ -82,7 +96,14 @@ assert.equal(data.daily["2026-02-01"].freeUsers, 8);
 assert.equal(data.daily["2026-02-02"].runs, 0);
 assert.equal(data.costsSummary.maximum, 0.5);
 assert.equal(data.actorDaily["2026-01-31"][0].revenue, 6);
+assert.equal(data.actorDaily["2026-01-31"].length, 3);
+assert.equal(data.actorDaily["2026-01-31"].find((actor) => actor.actorId === "actor-a").runs, 2);
+assert.equal(data.actorDaily["2026-01-31"].find((actor) => actor.actorId === "actor-b").results, 2);
+assert.equal(data.actorDaily["2026-01-31"].find((actor) => actor.actorId === "actor-a").cost, 1);
+assert.equal(data.actorDaily["2026-01-31"].find((actor) => actor.actorId === "actor-c").revenue, 0);
+assert.equal(data.actorDaily["2026-01-31"].find((actor) => actor.actorId === "actor-c").runs, 2);
 assert.equal(data.actorNames["actor-a"], "Actor A");
+assert.equal(data.actorNames["actor-c"], "Actor C");
 
 const weekly = range.group(data, "week");
 assert.deepEqual(Array.from(weekly.days), ["2026-01-26", "2026-02-02"]);
@@ -101,6 +122,10 @@ const daily = range.group(data, "day");
 assert.deepEqual(Array.from(daily.days), ["2026-01-31", "2026-02-01", "2026-02-02"]);
 assert.equal(daily.daily["2026-01-31"].runs, 3);
 assert.equal(daily.daily["2026-01-31"].actorRevenue["actor-a"], 6);
+assert.equal(daily.daily["2026-01-31"].actorStats["actor-a"].profit, 5);
+assert.equal(daily.daily["2026-01-31"].actorStats["actor-b"].runs, 1);
+assert.equal(daily.daily["2026-01-31"].actorStats["actor-c"].runs, 2);
+assert.equal(daily.daily["2026-01-31"].actorRevenue["actor-c"], 0);
 
 const monthly = range.group(data, "month");
 assert.deepEqual(Array.from(monthly.days), ["2026-01-01", "2026-02-01"]);

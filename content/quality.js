@@ -42,6 +42,38 @@
     state.loadedAt = 0;
   });
 
+  // A closed-and-reopened tab loses all in-memory state, so on a fresh page
+  // load there is otherwise no way to avoid a full reload even for data that
+  // was just fetched a minute ago. Paint the last durably-cached table
+  // immediately, then let ensureHost()'s normal TTL/silent-refresh path (see
+  // beginLoad()) decide whether to quietly bring it up to date.
+  //
+  // ensureHost() waits on restoreSettled before it will trigger a load.
+  // Without this, its 400ms poll starts firing as soon as the page's DOM
+  // exists, which is usually faster than AAP_API.whenReady() below (that
+  // needs the page to make its own first authenticated request) - so the
+  // poll would reliably win the race and call beginLoad() for real before
+  // this restore ever got to check the durable cache.
+  let restoreSettled = false;
+  (async () => {
+    try {
+      await AAP_API.whenReady?.();
+      if (state.requestId) return;
+      const scope = AAP_API.authScope?.() || "";
+      const cached = await AAP_CACHE.getView("quality", QUALITY_REFRESH_TTL_MS, scope);
+      if (!cached.hit || state.requestId) return;
+      state.actors = cached.data.actors || [];
+      state.rows = cached.data.rows || [];
+      state.requestId = 1;
+      state.loadedAt = cached.updatedAt;
+      renderRows();
+    } catch {
+      // Best effort only; ensureHost() still triggers a normal load either way.
+    } finally {
+      restoreSettled = true;
+    }
+  })();
+
   function onOverviewRoute() {
     return ROUTE_RE.test(location.pathname) && !new URLSearchParams(location.search).has("actorId");
   }
@@ -637,7 +669,7 @@
     }
     if (empty) empty.dataset.aapQualityNative = "hidden";
     if (created) renderRows();
-    if (state.showOriginal) return;
+    if (state.showOriginal || !restoreSettled) return;
     if (!state.requestId) beginLoad(false);
     else if (Date.now() - state.loadedAt > QUALITY_REFRESH_TTL_MS) beginLoad(false, true);
   }
@@ -672,6 +704,7 @@
       const rows = await loadActorRows(actors, requestId, silent);
       if (requestId !== state.requestId) return;
       if (silent) state.rows = rows;
+      AAP_CACHE.setView?.("quality", { actors: state.actors, rows: state.rows }, AAP_API.authScope?.() || "");
     } catch (error) {
       if (requestId === state.requestId && !silent) state.error = `Couldn't load Actor quality data${error?.message ? `: ${error.message}` : "."}`;
     } finally {

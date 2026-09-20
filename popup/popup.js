@@ -74,30 +74,28 @@
     loadCacheSummary();
   });
 
-  // ---- Settings: breakdown tooltip actor count ----
-  // Kept opt-in — the content script falls back to this same default when
-  // nothing is stored, so a user who never opens this panel sees no change.
+  // ---- Settings: monetization tooltip actor limit -----------------------
   const TOOLTIP_ACTOR_COUNT_KEY = "aap.tooltipActorCount";
-  const TOOLTIP_ACTOR_COUNT_DEFAULT = 10;
-  const TOOLTIP_ACTOR_COUNT_MAX = 50;
-
+  const TOOLTIP_ACTOR_COUNT_DEFAULT = 20;
+  const TOOLTIP_ACTOR_COUNT_MAX = 100;
   const countInput = document.getElementById("tooltip-actor-count");
   document.getElementById("tooltip-actor-count-default").textContent = TOOLTIP_ACTOR_COUNT_DEFAULT;
 
-  chrome.storage.local.get(TOOLTIP_ACTOR_COUNT_KEY).then((r) => {
-    countInput.value = r[TOOLTIP_ACTOR_COUNT_KEY] > 0 ? r[TOOLTIP_ACTOR_COUNT_KEY] : TOOLTIP_ACTOR_COUNT_DEFAULT;
+  chrome.storage.local.get(TOOLTIP_ACTOR_COUNT_KEY).then((result) => {
+    const stored = Math.round(Number(result[TOOLTIP_ACTOR_COUNT_KEY]));
+    countInput.value = stored > 0 ? Math.min(TOOLTIP_ACTOR_COUNT_MAX, stored) : TOOLTIP_ACTOR_COUNT_DEFAULT;
   });
 
   countInput.addEventListener("change", () => {
-    const raw = Math.round(Number(countInput.value));
-    if (!(raw > 0)) {
+    const value = Math.round(Number(countInput.value));
+    if (!(value > 0)) {
       countInput.value = TOOLTIP_ACTOR_COUNT_DEFAULT;
       chrome.storage.local.remove(TOOLTIP_ACTOR_COUNT_KEY);
       return;
     }
-    const n = Math.min(TOOLTIP_ACTOR_COUNT_MAX, raw);
-    countInput.value = n;
-    chrome.storage.local.set({ [TOOLTIP_ACTOR_COUNT_KEY]: n });
+    const next = Math.min(TOOLTIP_ACTOR_COUNT_MAX, value);
+    countInput.value = next;
+    chrome.storage.local.set({ [TOOLTIP_ACTOR_COUNT_KEY]: next });
   });
 
   document.getElementById("tooltip-actor-count-reset").addEventListener("click", () => {

@@ -3,7 +3,10 @@
   const ROUTE_RE = /^(?:\/organization\/[^/]+)?\/actors\/insights\/monetization\/?$/;
   const RANGE_KEY = "aap.dateRange";
   const GROUPING_KEY = "aap.rangeGrouping";
-  const VIEW_KEY = "aap.monetizationView";
+  // Start the enhanced range view after the tooltip rollout even if an older
+  // install had persisted the native Original view. Users can still switch
+  // back to Original with the navigation toggle.
+  const VIEW_KEY = "aap.monetizationView.v2";
   const CACHE_CLEAR_KEY = "aap.cacheClearedAt";
   const HISTORICAL_CACHE_TTL_MS = 15 * 60 * 1000;
   const CURRENT_MONTH_CACHE_TTL_MS = 60 * 1000;
@@ -41,6 +44,11 @@
       ],
     },
   ];
+  const ACTOR_COLOR_PALETTE = ["#2dd4bf", "#60a5fa", "#f472b6", "#facc15", "#a78bfa", "#fb923c", "#34d399", "#f87171"];
+  const MUTED_ACTOR_COLOR = "#6b7280";
+  const TOOLTIP_ACTOR_COUNT_KEY = "aap.tooltipActorCount";
+  const DEFAULT_TOOLTIP_ACTOR_COUNT = 20;
+  const MAX_TOOLTIP_ACTOR_COUNT = 100;
 
   const state = {
     observedMonth: null,
@@ -59,6 +67,7 @@
   };
 
   const memoryCache = new Map();
+  let tooltipActorCount = DEFAULT_TOOLTIP_ACTOR_COUNT;
   AAP_API.onTokenChange?.(() => {
     // A tab can stay open while the user logs out or switches accounts. Do
     // not retain or display the previous account's range data in that case.
@@ -70,15 +79,24 @@
     }
   });
   chrome.storage.onChanged?.addListener((changes, area) => {
-    if (area !== "local" || !changes[CACHE_CLEAR_KEY]) return;
-    memoryCache.clear();
-    state.loadedKey = null;
-    state.retryAt = 0;
-    state.loadId++;
-    state.loading = false;
-    // Keep the current chart on screen while the cleared range is fetched
-    // again, instead of replacing it with a blank loading state.
-    if (state.view === "custom" && validRange(state.range) && state.observedMonth) loadRange();
+    if (area !== "local") return;
+    if (changes[CACHE_CLEAR_KEY]) {
+      memoryCache.clear();
+      state.loadedKey = null;
+      state.retryAt = 0;
+      state.loadId++;
+      state.loading = false;
+      // Keep the current chart on screen while the cleared range is fetched
+      // again, instead of replacing it with a blank loading state.
+      if (state.view === "custom" && validRange(state.range) && state.observedMonth) loadRange();
+    }
+    if (changes[TOOLTIP_ACTOR_COUNT_KEY]) {
+      tooltipActorCount = normalizeTooltipActorCount(changes[TOOLTIP_ACTOR_COUNT_KEY].newValue);
+      if (rangeTooltipState.canvas && rangeTooltipState.index != null) {
+        renderRangeTooltip(rangeTooltipState.canvas, rangeTooltipState.index);
+        positionRangeTooltip(rangeTooltipState.x, rangeTooltipState.y);
+      }
+    }
   });
   let selector = null;
   let fromSelect = null;
@@ -88,6 +106,16 @@
   let controlsError = null;
   let quickButtons = [];
   let rangeTooltip = null;
+  let rangeTooltipState = {
+    period: null,
+    sort: "revenue",
+    direction: "desc",
+    pinned: false,
+    canvas: null,
+    index: null,
+    x: 0,
+    y: 0,
+  };
   let lastPath = location.pathname;
   let pageThemeSignature = "";
   let rangeInitialized = false;
@@ -198,6 +226,13 @@
     if (className) element.className = className;
     if (text != null) element.textContent = text;
     return element;
+  }
+
+  function normalizeTooltipActorCount(value) {
+    const count = Math.round(Number(value));
+    return Number.isFinite(count) && count > 0
+      ? Math.min(MAX_TOOLTIP_ACTOR_COUNT, count)
+      : DEFAULT_TOOLTIP_ACTOR_COUNT;
   }
 
   // Storage is only a convenience for remembering the controls. It must not
@@ -596,7 +631,10 @@
       const legend = createElement("div", "aap-range-legend");
       overlay.append(canvas, legend);
       canvas.addEventListener("mousemove", onRangeChartHover);
-      canvas.addEventListener("mouseleave", hideRangeTooltip);
+      canvas.addEventListener("mouseleave", () => {
+        if (!rangeTooltipState.pinned) hideRangeTooltip();
+      });
+      canvas.addEventListener("click", onRangeChartClick);
       host.appendChild(overlay);
     }
     overlay.style.display = "";
@@ -713,41 +751,66 @@
     return [definition];
   }
 
-  function actorChartSeries(data) {
+  function actorTotals(data) {
     const names = Object.entries(data?.actorNames || {});
-    if (!names.length) return [];
-    const totals = new Map(names.map(([actorId]) => [actorId, 0]));
+    const totals = new Map(names.map(([actorId]) => [actorId, { revenue: 0, runs: 0 }]));
     for (const row of Object.values(data.daily || {})) {
-      for (const [actorId, value] of Object.entries(row.actorRevenue || {})) {
-        if (totals.has(actorId)) totals.set(actorId, totals.get(actorId) + Number(value || 0));
+      for (const [actorId, actor] of Object.entries(row.actorStats || {})) {
+        const total = totals.get(actorId);
+        if (!total) continue;
+        total.revenue += Number(actor.revenue) || 0;
+        total.runs += Number(actor.runs) || 0;
       }
     }
-    const actors = names
-      .sort((a, b) => (totals.get(b[0]) || 0) - (totals.get(a[0]) || 0))
-      .map(([actorId, name]) => ({
-        key: actorId,
-        label: name,
-        color: actorColor(actorId, names),
-        type: "bar",
-        value: (row) => row.actorRevenue?.[actorId] || 0,
-      }));
-    const actorSeries = actors.slice();
-    actors.push({
-      key: "__other__",
-      label: "Other actors",
-      color: "#6b7280",
+    return { names, totals };
+  }
+
+  function sortActorRanking(names, totals) {
+    return names
+      .sort((left, right) => {
+        const leftTotal = totals.get(left[0]) || { revenue: 0, runs: 0 };
+        const rightTotal = totals.get(right[0]) || { revenue: 0, runs: 0 };
+        // Keep every revenue-producing Actor ahead of run-only Actors before
+        // comparing the actual revenue totals. This makes the display limit
+        // useful even when many Actors have runs but no monetization.
+        return Number(rightTotal.revenue > 0) - Number(leftTotal.revenue > 0)
+          || rightTotal.revenue - leftTotal.revenue
+          || rightTotal.runs - leftTotal.runs
+          || String(left[1]).localeCompare(String(right[1]));
+      });
+  }
+
+  function actorRanking(data) {
+    const { names, totals } = actorTotals(data);
+    return sortActorRanking(names, totals)
+      .filter(([actorId]) => {
+        const total = totals.get(actorId);
+        return total && (total.revenue > 0 || total.runs > 0);
+      });
+  }
+
+  function actorRevenueRanking(data) {
+    const { names, totals } = actorTotals(data);
+    return sortActorRanking(names, totals)
+      .filter(([actorId]) => (totals.get(actorId)?.revenue || 0) > 0);
+  }
+
+  function actorChartSeries(data) {
+    const actors = actorRevenueRanking(data);
+    return actors.map(([actorId, name]) => ({
+      key: actorId,
+      label: name,
+      color: actorColor(actorId, actors),
       type: "bar",
-      value: (row) => {
-        const accounted = actorSeries.reduce((sum, actor) => sum + Number(actor.value(row) || 0), 0);
-        return Math.max(0, Number(row.revenue || 0) - accounted);
-      },
-    });
-    return actors;
+      value: (row) => row.actorRevenue?.[actorId] || 0,
+    }));
   }
 
   function actorColor(actorId, actors) {
-    const palette = ["#2dd4bf", "#60a5fa", "#f472b6", "#facc15", "#a78bfa", "#fb923c", "#34d399", "#f87171"];
-    return palette[Math.max(0, actors.findIndex(([id]) => id === actorId)) % palette.length];
+    const index = actors.findIndex(([id]) => id === actorId);
+    return index >= 0 && index < ACTOR_COLOR_PALETTE.length
+      ? ACTOR_COLOR_PALETTE[index]
+      : MUTED_ACTOR_COLOR;
   }
 
   function chartValues(series, data) {
@@ -757,17 +820,11 @@
     });
   }
 
-  function niceMax(value) {
-    if (!(value > 0)) return 1;
-    const raw = value / 5;
-    const magnitude = 10 ** Math.floor(Math.log10(raw));
-    const normalized = raw / magnitude;
-    const step = (normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10) * magnitude;
-    return step * 5;
-  }
-
-  function axisValue(value, definition) {
-    if (definition.key === "money" || definition.key === "cost") return `$${value.toFixed(value < 1 ? 2 : 0)}`;
+  function axisValue(value, definition, step = 1) {
+    if (definition.key === "money" || definition.key === "cost") {
+      const decimals = value === 0 ? 2 : step < 1 ? 2 : step % 1 ? 1 : 0;
+      return `$${value.toFixed(decimals)}`;
+    }
     return formatCount(value);
   }
 
@@ -827,10 +884,12 @@
     const valueMaxima = stackedBars
       ? values.map((row) => row.reduce((sum, value) => sum + value, 0))
       : values.flat();
-    const maxValue = niceMax(Math.max(1, ...valueMaxima));
+    const scale = AAPR.niceScale(Math.max(0, ...valueMaxima));
+    const maxValue = scale.max;
     const top = showLegend && series.length > 1 ? 34 : 16;
     const bottom = 30;
-    const left = Math.max(58, Math.ceil(ctx.measureText(axisValue(maxValue, definition)).width) + 16);
+    const axisLabels = Array.from({ length: scale.ticks + 1 }, (_, tick) => axisValue(scale.step * tick, definition, scale.step));
+    const left = Math.max(58, ...axisLabels.map((label) => Math.ceil(ctx.measureText(label).width) + 16));
     const right = 16;
     const plotWidth = Math.max(1, rect.width - left - right);
     const plotHeight = Math.max(1, rect.height - top - bottom);
@@ -839,8 +898,9 @@
 
     ctx.strokeStyle = gridColor;
     ctx.lineWidth = 1;
-    for (let tick = 0; tick <= 5; tick++) {
-      const fraction = tick / 5;
+    for (let tick = 0; tick <= scale.ticks; tick++) {
+      const value = Math.min(maxValue, scale.step * tick);
+      const fraction = value / maxValue;
       const y = top + plotHeight * (1 - fraction);
       ctx.beginPath();
       ctx.moveTo(left, y);
@@ -848,7 +908,7 @@
       ctx.stroke();
       ctx.fillStyle = axisColor;
       ctx.textAlign = "right";
-      ctx.fillText(axisValue(maxValue * fraction, definition), left - 8, y);
+      ctx.fillText(axisValue(value, definition, scale.step), left - 8, y);
     }
 
     const labelEvery = Math.max(1, Math.ceil(data.days.length / 8));
@@ -937,6 +997,55 @@
     return `Week of ${AAPR.formatDate(period, { month: "short", day: "numeric", year: "numeric" })}`;
   }
 
+  const ACTOR_TOOLTIP_COLUMNS = [
+    { key: "name", label: "Actor" },
+    { key: "revenue", label: "Revenue", format: (row) => AAPF.money(row.revenue) },
+    { key: "cost", label: "Cost", format: (row) => AAPF.money(row.cost) },
+    { key: "profit", label: "Profit", format: (row) => AAPF.money(row.profit) },
+    { key: "runs", label: "Runs", format: (row) => formatCount(row.runs) },
+    { key: "results", label: "Results", format: (row) => formatCount(row.results) },
+  ];
+
+  function rangeChartTarget(event) {
+    const canvas = event.currentTarget;
+    const plot = canvas.__aapRangePlot;
+    const data = canvas.__aapRange?.data;
+    if (!plot || !data?.days?.length) return null;
+    const rect = canvas.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    if (x < plot.left || x > rect.width - plot.right) return null;
+    return {
+      canvas,
+      index: Math.min(data.days.length - 1, Math.max(0, Math.floor((x - plot.left) / plot.slot))),
+    };
+  }
+
+  function setRangeTooltipTarget(canvas, index) {
+    const period = canvas.__aapRange?.data?.days?.[index] || null;
+    if (period !== rangeTooltipState.period) {
+      rangeTooltipState.sort = "revenue";
+      rangeTooltipState.direction = "desc";
+      rangeTooltipState.period = period;
+    }
+    rangeTooltipState.canvas = canvas;
+    rangeTooltipState.index = index;
+  }
+
+  function sortedActorRows(rows, ranking = []) {
+    const direction = rangeTooltipState.direction === "asc" ? 1 : -1;
+    const rankingIndex = new Map(ranking.map(([actorId], index) => [actorId, index]));
+    return [...rows].sort((left, right) => {
+      let comparison;
+      if (rangeTooltipState.sort === "name") {
+        comparison = String(left.name || left.actorId).localeCompare(String(right.name || right.actorId));
+      } else {
+        comparison = Number(left[rangeTooltipState.sort] || 0) - Number(right[rangeTooltipState.sort] || 0);
+      }
+      if (comparison) return direction * comparison;
+      return (rankingIndex.get(left.actorId) ?? ranking.length) - (rankingIndex.get(right.actorId) ?? ranking.length);
+    });
+  }
+
   function renderRangeTooltip(canvas, index) {
     const { definition, data, series } = canvas.__aapRange || {};
     if (!data || !data.days[index] || !series?.length) return false;
@@ -944,9 +1053,74 @@
     const row = data.daily[period] || {};
     if (!rangeTooltip) {
       rangeTooltip = createElement("div", "aap-range-tooltip");
+      rangeTooltip.addEventListener("click", onRangeTooltipClick);
       document.body.appendChild(rangeTooltip);
     }
-    rangeTooltip.replaceChildren(createElement("div", "aap-range-tooltip-period", tooltipPeriodLabel(period)));
+
+    rangeTooltip.classList.toggle("aap-range-tooltip-pinned", rangeTooltipState.pinned);
+    rangeTooltip.replaceChildren();
+    if (rangeTooltipState.pinned) {
+      const pinBar = createElement("div", "aap-range-tooltip-pin-bar", "Pinned — click the bar again or press Esc to close");
+      const close = createElement("button", "aap-range-tooltip-close", "×");
+      close.type = "button";
+      close.setAttribute("aria-label", "Close");
+      pinBar.appendChild(close);
+      rangeTooltip.appendChild(pinBar);
+    }
+    rangeTooltip.appendChild(createElement("div", "aap-range-tooltip-period", tooltipPeriodLabel(period)));
+
+    if (definition.key === "money") {
+      const eligibleActors = Object.values(row.actorStats || {}).filter((actor) => Number(actor.revenue) > 0 || Number(actor.runs) > 0);
+      if (!eligibleActors.length) {
+        rangeTooltip.appendChild(createElement("div", "aap-range-tooltip-note", "No revenue or runs this day."));
+        return true;
+      }
+      const rankedActors = actorRanking(data);
+      const visibleActorIds = new Set(rankedActors.slice(0, tooltipActorCount).map(([actorId]) => actorId));
+      const actors = eligibleActors.filter((actor) => visibleActorIds.has(actor.actorId));
+
+      const hint = createElement(
+        "div",
+        "aap-range-tooltip-subtitle",
+        rangeTooltipState.pinned
+          ? `Showing ${actors.length} of ${eligibleActors.length} eligible Actors`
+          : `Showing ${actors.length} of ${eligibleActors.length} eligible Actors · click bar to sort`,
+      );
+      rangeTooltip.appendChild(hint);
+
+      const table = document.createElement("table");
+      table.className = "aap-range-tooltip-table";
+      const head = document.createElement("thead");
+      const headRow = document.createElement("tr");
+      for (const column of ACTOR_TOOLTIP_COLUMNS) {
+        const cell = createElement("th", rangeTooltipState.sort === column.key ? "aap-range-tooltip-sorted" : "", column.label);
+        cell.dataset.sort = column.key;
+        if (rangeTooltipState.sort === column.key) {
+          cell.appendChild(document.createTextNode(rangeTooltipState.direction === "asc" ? " ▲" : " ▼"));
+        }
+        headRow.appendChild(cell);
+      }
+      head.appendChild(headRow);
+      table.appendChild(head);
+
+      const body = document.createElement("tbody");
+      for (const actor of sortedActorRows(actors, rankedActors)) {
+        const rowElement = document.createElement("tr");
+        const nameCell = document.createElement("td");
+        const dot = createElement("span", "aap-range-dot");
+        dot.style.backgroundColor = actorColor(actor.actorId, actorRevenueRanking(data));
+        nameCell.append(dot, document.createTextNode(actor.name || actor.actorId));
+        rowElement.appendChild(nameCell);
+        for (const column of ACTOR_TOOLTIP_COLUMNS.slice(1)) {
+          rowElement.appendChild(createElement("td", "", column.format(actor)));
+        }
+        body.appendChild(rowElement);
+      }
+      table.appendChild(body);
+      rangeTooltip.appendChild(table);
+      return true;
+    }
+
     for (const item of series) {
       const value = item.value ? item.value(row) : row[item.key];
       const money = definition.key === "money" || item.key === "cost";
@@ -975,29 +1149,84 @@
     return true;
   }
 
-  function onRangeChartHover(event) {
-    const canvas = event.currentTarget;
-    const plot = canvas.__aapRangePlot;
-    const data = canvas.__aapRange?.data;
-    if (!plot || !data?.days?.length) return hideRangeTooltip();
-    const rect = canvas.getBoundingClientRect();
-    const x = event.clientX - rect.left;
-    if (x < plot.left || x > rect.width - plot.right) return hideRangeTooltip();
-    const index = Math.min(data.days.length - 1, Math.max(0, Math.floor((x - plot.left) / plot.slot)));
-    renderRangeTooltip(canvas, index);
-    rangeTooltip.style.display = "block";
-    let left = event.clientX + 12;
-    let top = event.clientY + 12;
+  function positionRangeTooltip(clientX, clientY) {
+    if (!rangeTooltip) return;
     const tooltipRect = rangeTooltip.getBoundingClientRect();
-    if (left + tooltipRect.width > window.innerWidth - 8) left = event.clientX - tooltipRect.width - 12;
-    if (top + tooltipRect.height > window.innerHeight - 8) top = event.clientY - tooltipRect.height - 12;
+    let left = clientX + 12;
+    let top = clientY + 12;
+    if (left + tooltipRect.width > window.innerWidth - 8) left = clientX - tooltipRect.width - 12;
+    if (top + tooltipRect.height > window.innerHeight - 8) top = clientY - tooltipRect.height - 12;
     rangeTooltip.style.left = `${left}px`;
     rangeTooltip.style.top = `${top}px`;
   }
 
-  function hideRangeTooltip() {
-    if (rangeTooltip) rangeTooltip.style.display = "none";
+  function onRangeChartHover(event) {
+    if (rangeTooltipState.pinned) return;
+    const target = rangeChartTarget(event);
+    if (!target) return hideRangeTooltip();
+    const { canvas, index } = target;
+    setRangeTooltipTarget(canvas, index);
+    rangeTooltipState.x = event.clientX;
+    rangeTooltipState.y = event.clientY;
+    if (!renderRangeTooltip(canvas, index)) return hideRangeTooltip();
+    rangeTooltip.style.display = "block";
+    positionRangeTooltip(event.clientX, event.clientY);
   }
+
+  function onRangeChartClick(event) {
+    const target = rangeChartTarget(event);
+    if (!target || target.canvas.__aapRange?.definition?.key !== "money") return;
+    if (rangeTooltipState.pinned && rangeTooltipState.canvas === target.canvas && rangeTooltipState.index === target.index) {
+      return hideRangeTooltip();
+    }
+    rangeTooltipState.pinned = true;
+    setRangeTooltipTarget(target.canvas, target.index);
+    rangeTooltipState.x = event.clientX;
+    rangeTooltipState.y = event.clientY;
+    if (!renderRangeTooltip(target.canvas, target.index)) return hideRangeTooltip();
+    rangeTooltip.style.display = "block";
+    positionRangeTooltip(event.clientX, event.clientY);
+  }
+
+  function onRangeTooltipClick(event) {
+    event.stopPropagation();
+    if (event.target.closest(".aap-range-tooltip-close")) return hideRangeTooltip();
+    const header = event.target.closest("th[data-sort]");
+    if (!header || !rangeTooltipState.pinned || !rangeTooltipState.canvas) return;
+    const key = header.dataset.sort;
+    rangeTooltipState.direction = rangeTooltipState.sort === key
+      ? rangeTooltipState.direction === "desc" ? "asc" : "desc"
+      : key === "name" ? "asc" : "desc";
+    rangeTooltipState.sort = key;
+    renderRangeTooltip(rangeTooltipState.canvas, rangeTooltipState.index);
+    positionRangeTooltip(rangeTooltipState.x, rangeTooltipState.y);
+  }
+
+  function hideRangeTooltip() {
+    if (rangeTooltip) {
+      rangeTooltip.style.display = "none";
+      rangeTooltip.classList.remove("aap-range-tooltip-pinned");
+    }
+    rangeTooltipState = {
+      period: null,
+      sort: "revenue",
+      direction: "desc",
+      pinned: false,
+      canvas: null,
+      index: null,
+      x: 0,
+      y: 0,
+    };
+  }
+
+  document.addEventListener("click", (event) => {
+    if (!rangeTooltipState.pinned) return;
+    if (rangeTooltip?.contains(event.target) || rangeTooltipState.canvas?.contains(event.target)) return;
+    hideRangeTooltip();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && rangeTooltipState.pinned) hideRangeTooltip();
+  });
 
   async function loadRange() {
     if (!validRange(state.range) || !state.observedMonth) return;
@@ -1054,9 +1283,10 @@
   window.dispatchEvent(new Event("aap-request-info"));
 
   syncPageTheme();
-  storageGet([RANGE_KEY, GROUPING_KEY, VIEW_KEY]).then((result) => {
+  storageGet([RANGE_KEY, GROUPING_KEY, VIEW_KEY, TOOLTIP_ACTOR_COUNT_KEY]).then((result) => {
     state.grouping = result[GROUPING_KEY] === "day" || result[GROUPING_KEY] === "month" ? result[GROUPING_KEY] : "day";
     state.view = result[VIEW_KEY] === "original" ? "original" : "custom";
+    tooltipActorCount = normalizeTooltipActorCount(result[TOOLTIP_ACTOR_COUNT_KEY]);
     const stored = result[RANGE_KEY];
     if (validRange(stored)) {
       // Keep optional day bounds so the rolling shortcuts (1m/3m/6m/1y)

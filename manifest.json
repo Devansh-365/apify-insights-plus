@@ -23,20 +23,6 @@
   "content_scripts": [
     {
       "matches": [
-        "https://console.apify.com/*",
-        "https://apify.com/*",
-        "https://www.apify.com/*"
-      ],
-      "js": [
-        "content/promo.js"
-      ],
-      "css": [
-        "content/promo.css"
-      ],
-      "run_at": "document_idle"
-    },
-    {
-      "matches": [
         "https://console.apify.com/*"
       ],
       "js": [

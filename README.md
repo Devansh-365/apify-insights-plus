@@ -4,7 +4,7 @@ This Chrome extension adds extra views to the [Apify Console Insights](https://c
 
 ## What it adds
 
-- **Monetization:** Compare months, use the 1m, 3m, 6m, and 1y shortcuts, and group charts by day, week, or month. Revenue is split by Actor in the chart tooltip.
+- **Monetization:** Compare months, use the 1m, 3m, 6m, and 1y shortcuts, and group charts by day, week, or month. Click a day to pin a tooltip with Actors that earned revenue or ran that day; sort the Actor, Revenue, Cost, Profit, Runs, or Results columns. The tooltip shows up to 20 Actors by default, configurable from the extension popup.
 - **Acquisition:** See totals and data for all Actors in searchable and sortable tables. This includes percentages, referrers, and countries.
 - **Actor quality:** See all your Actors in one table with their scores, setup checks, highlights, and suggestions.
 - **Debugging:** See the success rate for all Actors. Select an Actor to see its User runs.

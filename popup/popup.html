@@ -36,14 +36,6 @@
       </section>
 
       <footer class="ft">
-        <div class="promo">
-          <span>Developed by <strong>@igolaizola</strong></span>
-          <span class="promo-links">
-            <a href="https://apify.com/igolaizola?fpr=ig" target="_blank" rel="noopener">Apify profile</a>
-            <span aria-hidden="true">·</span>
-            <a href="https://x.com/igolaizola" target="_blank" rel="noopener">X profile</a>
-          </span>
-        </div>
         <a id="open-insights" href="https://console.apify.com/actors/insights/monetization" target="_blank" rel="noopener">
           Open Insights →
         </a>
@@ -61,11 +53,11 @@
       <section class="card">
         <div class="card-title">Settings</div>
         <label class="field">
-          <span>Actors shown in breakdown tooltip</span>
-          <input id="tooltip-actor-count" type="number" min="1" max="50" />
+          <span>Actors shown in monetization tooltip</span>
+          <input id="tooltip-actor-count" type="number" min="1" max="100" />
         </label>
         <div class="field-hint">
-          Default is <span id="tooltip-actor-count-default"></span>.
+          Default is <span id="tooltip-actor-count-default"></span>. Actors with revenue or at least one run are eligible.
           <button id="tooltip-actor-count-reset" class="link-button" type="button">Reset to default</button>
         </div>
       </section>

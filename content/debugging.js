@@ -55,6 +55,46 @@
     state.loadedAt = 0;
   });
 
+  // A closed-and-reopened tab loses all in-memory state, so on a fresh page
+  // load there is otherwise no way to avoid a full reload even for data that
+  // was just fetched a minute ago. Paint the last durably-cached overview
+  // immediately, then let ensureHost()'s normal TTL/silent-refresh path (see
+  // beginLoad()) decide whether to quietly bring it up to date. Only applies
+  // to the account-wide overview, matching the periodic-refresh scope
+  // decision: a URL that already points at a selected Actor always does a
+  // normal load instead.
+  //
+  // ensureHost() waits on restoreSettled before it will trigger a load.
+  // Without this, its 400ms poll starts firing as soon as the page's DOM
+  // exists, which is usually faster than AAP_API.whenReady() below (that
+  // needs the page to make its own first authenticated request) - so the
+  // poll would reliably win the race and call beginLoad() for real before
+  // this restore ever got to check the durable cache.
+  let restoreSettled = false;
+  (async () => {
+    try {
+      await AAP_API.whenReady?.();
+      if (state.requestId || currentActorId()) return;
+      const month = currentMonthStartAt();
+      const scope = AAP_API.authScope?.() || "";
+      const cached = await AAP_CACHE.getView("debugging", refreshTtl(month), `${month}:${scope}`);
+      if (!cached.hit || state.requestId || currentActorId()) return;
+      state.contextKey = contextKey(month, null);
+      state.selectedActorId = null;
+      state.monthStartAt = month;
+      state.actors = cached.data.actors || [];
+      state.rows = cached.data.rows || [];
+      state.total = cached.data.total ?? null;
+      state.requestId = 1;
+      state.loadedAt = cached.updatedAt;
+      renderRows();
+    } catch {
+      // Best effort only; ensureHost() still triggers a normal load either way.
+    } finally {
+      restoreSettled = true;
+    }
+  })();
+
   const onRoute = () => ROUTE_RE.test(location.pathname);
 
   if (onRoute()) document.documentElement.classList.add(OVERVIEW_CLASS);
@@ -651,7 +691,7 @@
     const month = currentMonthStartAt();
     const actor = currentActorId();
     const key = contextKey(month, actor);
-    if (state.showOriginal) return;
+    if (state.showOriginal || !restoreSettled) return;
     if (key !== state.contextKey) { beginLoad(month, actor, false); return; }
     // Periodic silent refresh only applies to the account-wide overview: a
     // background refresh of the selected-Actor run list would reset its
@@ -753,6 +793,11 @@
         await totalTask;
         if (requestId !== state.requestId) return;
         state.rows = actorResult.status === "fulfilled" ? actorResult.value.filter(Boolean) : [];
+        AAP_CACHE.setView?.("debugging", {
+          actors: state.actors,
+          rows: state.rows,
+          total: state.total,
+        }, `${monthStartAt}:${AAP_API.authScope?.() || ""}`);
       }
     } catch (error) {
       if (requestId === state.requestId && !silent) state.error = `Couldn't load debugging data${error?.message ? `: ${error.message}` : "."}`;

@@ -3,9 +3,8 @@
  * https://console.apify.com/actors/insights/monetization with our own
  * canvas, plus a small toolbar inserted just above it: one metric selector
  * (Revenue, Runs, or Results). Revenue is always stacked by Actor.
- * Hovering any day shows a tooltip with that day's full stats plus the top
- * Actors (10 by default, configurable from the toolbar popup) by whichever
- * metric is active. We draw our own chart (rather
+ * Hovering any day shows a tooltip with that day's full stats plus Actors
+ * that earned revenue or ran that day. We draw our own chart (rather
  * than reaching into Apify's) because it's a black-box Chart.js canvas with
  * no exposed instance to restyle or hook into.
  *
@@ -38,12 +37,11 @@
   const ORIGINAL_MODE_CLASS = "aap-monetization-original-mode";
   const TOOLBAR_CLASS = "aap-toolbar-row";
   const PALETTE = ["#2dd4bf", "#60a5fa", "#f472b6", "#facc15", "#a78bfa", "#fb923c", "#34d399", "#f87171"];
-  const OTHER_COLOR = "#6b7280";
+  const UNASSIGNED_COLOR = "#6b7280";
   const TOP_N = PALETTE.length;
-  // How many Actors the click-to-pin tooltip table lists, ranked by the
-  // active headline metric. Configurable from the extension's toolbar popup
-  // (Settings section) — this is just the fallback until that pref loads.
-  const DEFAULT_TOOLTIP_ACTOR_COUNT = 10;
+  const TOOLTIP_ACTOR_COUNT_KEY = "aap.tooltipActorCount";
+  const DEFAULT_TOOLTIP_ACTOR_COUNT = 20;
+  const MAX_TOOLTIP_ACTOR_COUNT = 100;
   const METRICS = [
     { key: "revenue", label: "Revenue", color: "#12966f", kind: "bar" }, // matches Apify's own chart bar color
     { key: "runs", label: "Runs", color: "#22d3ee", kind: "line" },
@@ -58,9 +56,8 @@
     // their last choice after the toolbar is simplified to one selector.
     legacyMetricsOn: "aap.metricsOn",
     showNative: "aap.showNativeOn",
-    tooltipActorCount: "aap.tooltipActorCount",
+    tooltipActorCount: TOOLTIP_ACTOR_COUNT_KEY,
   };
-  const MAX_TOOLTIP_ACTOR_COUNT = 50;
 
   // How often to re-fetch the cheap account-wide day totals while a month
   // stays loaded, so a long-open tab doesn't show numbers from whenever it
@@ -69,9 +66,9 @@
 
   // How often a still-open tab re-runs the full per-Actor index. Without
   // this, the breakdown was indexed exactly once per page load, so a tab
-  // opened before today's first paid run showed "No paid Actor activity this
-  // day" for today forever (while the account-wide totals, refreshed every
-  // minute, plainly showed revenue). Matches the cache TTL — re-running
+  // opened before today's first run missed that Actor in the tooltip forever
+  // (while the account-wide totals, refreshed every minute, plainly showed
+  // activity). Matches the cache TTL — re-running
   // sooner would just be served the same fresh cache and no-op.
   const BREAKDOWN_REFRESH_MS = 15 * 60 * 1000;
 
@@ -82,6 +79,7 @@
 
   let customChartReady = false;
   let activeMetric = "revenue";
+  let tooltipActorCount = DEFAULT_TOOLTIP_ACTOR_COUNT;
 
   // Add this before the first overlay poll. The native chart remains visible
   // until the replacement reports a successful draw, so a slow request or a
@@ -127,6 +125,13 @@
     }
   }
 
+  function normalizeTooltipActorCount(value) {
+    const count = Math.round(Number(value));
+    return Number.isFinite(count) && count > 0
+      ? Math.min(MAX_TOOLTIP_ACTOR_COUNT, count)
+      : DEFAULT_TOOLTIP_ACTOR_COUNT;
+  }
+
   storageGet(Object.values(PREF_KEYS)).then((r) => {
     const storedMetric = r[PREF_KEYS.metric];
     if (METRICS.some((metric) => metric.key === storedMetric)) activeMetric = storedMetric;
@@ -134,25 +139,19 @@
       activeMetric = METRICS.find((metric) => r[PREF_KEYS.legacyMetricsOn][metric.key])?.key || "revenue";
     }
     showNativeOn = !!r[PREF_KEYS.showNative];
+    tooltipActorCount = normalizeTooltipActorCount(r[PREF_KEYS.tooltipActorCount]);
     syncOverlayPage();
-    if (r[PREF_KEYS.tooltipActorCount] > 0) {
-      tooltipActorCount = Math.min(MAX_TOOLTIP_ACTOR_COUNT, Math.round(Number(r[PREF_KEYS.tooltipActorCount])));
-    }
     syncToolbar();
     drawChart();
   });
 
-  // The tooltip actor count is set from the toolbar popup (a separate
-  // context from this content script), not from anything in this page, so
-  // pick up a change made there live rather than requiring a reload.
-  chrome.storage.onChanged.addListener((changes, area) => {
-    if (area !== "local" || !changes[PREF_KEYS.tooltipActorCount]) return;
-    const next = changes[PREF_KEYS.tooltipActorCount].newValue;
-    tooltipActorCount = next > 0
-      ? Math.min(MAX_TOOLTIP_ACTOR_COUNT, Math.round(Number(next)))
-      : DEFAULT_TOOLTIP_ACTOR_COUNT;
-    renderTooltip();
-  });
+  if (typeof chrome !== "undefined") {
+    chrome.storage.onChanged?.addListener((changes, area) => {
+      if (area !== "local" || !changes[TOOLTIP_ACTOR_COUNT_KEY]) return;
+      tooltipActorCount = normalizeTooltipActorCount(changes[TOOLTIP_ACTOR_COUNT_KEY].newValue);
+      if (tooltipDay != null) renderTooltip();
+    });
+  }
 
   // This only ever records *which month the page is currently showing* — it
   // does NOT trigger loading. The very first request of a page load reliably
@@ -447,7 +446,6 @@
   let indexRun = 0; // guards against a stale index finishing after a month switch
   let lastData = null; // { month, dayMetrics, daily, actorCount, indexedAt, loading, indexing, progress, error }
   let showNativeOn = false;
-  let tooltipActorCount = DEFAULT_TOOLTIP_ACTOR_COUNT;
   let colorByActorId = new Map();
   let dayMetricsFetchedAt = 0;
   let dayMetricsFetching = false;
@@ -539,26 +537,17 @@
     try {
       const raw = await AAP_API.actorBreakdown(month, actorIds);
       const breakdown = Array.isArray(raw) ? raw : raw?.monetizationPerActor || [];
-      const paidActors = breakdown
+      const actors = breakdown
         .map((item) => ({
           actorId: item.actor?._id,
           actorName: item.actor?.title || item.actor?.name || item.actor?._id,
           totalRevenueUsd: item.earningsStats?.totalRevenueUsd ?? 0,
           totalCostUsd: item.earningsStats?.totalCostUsd ?? 0,
         }))
-        .filter((a) => a.actorId && (a.totalRevenueUsd > 0 || a.totalCostUsd > 0));
+        .filter((a) => a.actorId);
 
-      // The chart only assigns colors to the top Actors and folds the rest
-      // into its accurate account-wide "Other actors" segment. Index no more
-      // than the configured tooltip limit (at least the eight colored Actors)
-      // so large accounts do not generate an unnecessary request storm.
-      const indexLimit = Math.max(TOP_N, Math.min(50, Number(tooltipActorCount) || DEFAULT_TOOLTIP_ACTOR_COUNT));
-      const indexedActors = paidActors
-        .slice()
-        .sort((a, b) => b.totalRevenueUsd - a.totalRevenueUsd || b.totalCostUsd - a.totalCostUsd)
-        .slice(0, indexLimit);
       const perActor = await AAP_API.pooled(
-        indexedActors,
+        actors,
         async (actor) => {
           const [margin, runs] = await Promise.all([
             AAP_API.profitMargin(month, [actor.actorId]),
@@ -568,14 +557,14 @@
         },
         (done, total) => {
           if (myRun !== indexRun) return;
-          setData({ month, daily, actorCount: paidActors.length, indexedAt, indexing: true, dayMetrics, progress: { done, total } });
+          setData({ month, daily, actorCount: actors.length, indexedAt, indexing: true, dayMetrics, progress: { done, total } });
         },
       );
       if (myRun !== indexRun) return; // a newer month started loading
 
       daily = buildDailyIndex(perActor);
       colorByActorId = buildColorMap(daily);
-      actorCount = paidActors.length;
+      actorCount = actors.length;
       indexedAt = Date.now();
 
       // A handful of per-Actor fetches can transiently fail (a network blip,
@@ -662,20 +651,22 @@
           cost: m?.costUsd ?? 0,
           profit: m?.profitUsd ?? 0,
           margin: m?.margin ?? null,
-          runs: r?.TOTAL ?? null,
-          results: r?.RESULTS ?? null,
+          runs: r?.TOTAL ?? 0,
+          results: r?.RESULTS ?? 0,
           successRate: r && r.TOTAL ? r.SUCCEEDED / r.TOTAL : null,
         };
-        if (!row.revenue && !row.cost && !row.runs) continue;
+        // Show any Actor that generated revenue or ran at least once. This
+        // keeps run-only Actors available in the tooltip as well.
+        if (!(Number(row.revenue) > 0 || Number(row.runs) > 0)) continue;
         (daily[day] ||= []).push(row);
       }
     }
     return daily;
   }
 
-  // Assigns a stable color per Actor, ranked by total revenue across the
-  // whole indexed month — so an Actor's color stays the same from day to day
-  // (and across metric switches) instead of being re-picked per day/metric.
+  // Assigns stable colors to the top Actors ranked by total revenue across
+  // the indexed month. Lower-revenue Actors remain visible as muted gray
+  // entries instead of receiving additional colors.
   function buildColorMap(daily) {
     const totals = new Map();
     for (const rows of Object.values(daily)) {
@@ -687,6 +678,23 @@
     const map = new Map();
     ranked.slice(0, TOP_N).forEach(([actorId], i) => map.set(actorId, PALETTE[i]));
     return map;
+  }
+
+  function tooltipActorRanking(daily) {
+    const totals = new Map();
+    for (const rows of Object.values(daily || {})) {
+      for (const row of rows || []) {
+        const total = totals.get(row.actorId) || { actorId: row.actorId, revenue: 0, runs: 0 };
+        total.revenue += Number(row.revenue) || 0;
+        total.runs += Number(row.runs) || 0;
+        totals.set(row.actorId, total);
+      }
+    }
+    return [...totals.values()]
+      .sort((left, right) => Number(right.revenue > 0) - Number(left.revenue > 0)
+        || right.revenue - left.revenue
+        || right.runs - left.runs
+        || left.actorId.localeCompare(right.actorId));
   }
 
   function setData(data) {
@@ -852,8 +860,9 @@
       }
     });
 
-    // Revenue bars are always stacked by Actor. Missing or unindexed revenue
-    // stays visible in the grey "Other actors" segment.
+    // Revenue bars are always stacked by Actor. Every indexed Actor gets its
+    // own segment; a grey remainder is kept only for revenue that the API
+    // reports but that could not be matched to an indexed Actor.
     if (showBars) {
       days.forEach((day, i) => {
         const x = leftPad + i * slot + slot / 2;
@@ -864,23 +873,15 @@
         let acc = 0;
         const grouped = new Map();
         for (const row of lastData.daily?.[day] || []) {
-          const key = colorByActorId.get(row.actorId) || OTHER_COLOR;
+          const key = colorByActorId.get(row.actorId) || UNASSIGNED_COLOR;
           grouped.set(key, (grouped.get(key) || 0) + (row.revenue || 0));
         }
         const accounted = [...grouped.values()].reduce((sum, value) => sum + value, 0);
         const unassigned = Math.max(0, total - accounted);
-        if (unassigned > 0) grouped.set(OTHER_COLOR, (grouped.get(OTHER_COLOR) || 0) + unassigned);
-        // Stack every bar in the SAME order — by each Actor's month-long
-        // revenue rank (its position in PALETTE), with the merged "other
-        // Actors" grey band always on top. Without this, segments are drawn
-        // in whatever order Actors happened to be active that day, so a
-        // given Actor's colour lands in a different band on each bar and
-        // looks like it changed colour from day to day.
-        const rank = (color) => {
-          const i = PALETTE.indexOf(color);
-          return i === -1 ? Infinity : i; // OTHER_COLOR (not in PALETTE) sorts last → top of stack
-        };
-        const sumRows = [...grouped.entries()].sort((a, b) => rank(a[0]) - rank(b[0]));
+        if (unassigned > 0) grouped.set(UNASSIGNED_COLOR, (grouped.get(UNASSIGNED_COLOR) || 0) + unassigned);
+        // Keep the API's row order for the stack. Colors remain stable per
+        // Actor even when the set of earning Actors changes by day.
+        const sumRows = [...grouped.entries()];
         const rowsTotal = total || [...grouped.values()].reduce((s, v) => s + v, 0) || 1;
         for (const [color, value] of sumRows) {
           const segH = (value / rowsTotal) * barH;
@@ -995,13 +996,14 @@
     if (e.key === "Escape" && pinnedDay != null) hideTooltip();
   });
 
-  // Columns available in the per-day actor table, in display order. `sort`
+  // Columns available in the per-day earning-Actor table, in display order. `sort`
   // is the row field each header sorts by; "name" compares alphabetically,
   // everything else numerically.
   const TOOLTIP_COLUMNS = [
     { sort: "name", label: "Actor" },
     { sort: "revenue", label: "Revenue", fmt: (r) => AAPF.money(r.revenue || 0) },
     { sort: "cost", label: "Cost", fmt: (r) => AAPF.money(r.cost || 0) },
+    { sort: "profit", label: "Profit", fmt: (r) => AAPF.money(r.profit || 0) },
     { sort: "runs", label: "Runs", fmt: (r) => AAPF.compact(r.runs || 0) },
     { sort: "results", label: "Results", fmt: (r) => AAPF.compact(r.results || 0) },
   ];
@@ -1081,21 +1083,26 @@
     html += `<span>Success <b>${dm?.successRate != null ? AAPF.pct(dm.successRate) : "–"}</b></span>`;
     html += "</div>";
 
-    // The Actor count is always picked by the active headline metric —
-    // clicking a column header only reorders that same set, it never swaps
-    // which Actors are shown.
-    const ranked = [...(lastData.daily?.[day] || [])].sort((a, b) => (b[metric] || 0) - (a[metric] || 0));
-    const visibleActorCount = Math.min(MAX_TOOLTIP_ACTOR_COUNT, tooltipActorCount);
-    const topActors = ranked.slice(0, visibleActorCount);
+    // Include Actors that earned revenue or ran at least once on this day.
+    // The setting limits the highest-ranked Actors across the loaded month;
+    // sorting changes row order only and never changes that membership.
+    const eligibleActors = (lastData.daily?.[day] || []).filter((row) => Number(row.revenue) > 0 || Number(row.runs) > 0);
+    const rankedActors = tooltipActorRanking(lastData.daily);
+    const rankingIndex = new Map(rankedActors.map((row, index) => [row.actorId, index]));
+    const visibleActorIds = new Set(rankedActors.slice(0, tooltipActorCount).map((row) => row.actorId));
+    const actors = eligibleActors.filter((row) => visibleActorIds.has(row.actorId));
 
-    if (topActors.length) {
+    if (actors.length) {
       const sortDir = tooltipSort.dir === "asc" ? 1 : -1;
-      const sorted = [...topActors].sort((a, b) => {
-        if (tooltipSort.key === "name") return sortDir * a.name.localeCompare(b.name);
-        return sortDir * ((a[tooltipSort.key] || 0) - (b[tooltipSort.key] || 0));
+      const sorted = [...actors].sort((a, b) => {
+        const comparison = tooltipSort.key === "name"
+          ? a.name.localeCompare(b.name)
+          : (a[tooltipSort.key] || 0) - (b[tooltipSort.key] || 0);
+        if (comparison) return sortDir * comparison;
+        return (rankingIndex.get(a.actorId) ?? rankedActors.length) - (rankingIndex.get(b.actorId) ?? rankedActors.length);
       });
 
-      html += `<div class="aap-tt-subtitle">Top ${visibleActorCount} Actors by ${METRICS.find((m) => m.key === metric).label}</div>`;
+      html += `<div class="aap-tt-subtitle">Showing ${actors.length} of ${eligibleActors.length} eligible Actors</div>`;
       html += '<table class="aap-tt-table"><thead><tr>';
       for (const col of TOOLTIP_COLUMNS) {
         const isSortCol = tooltipSort.key === col.sort;
@@ -1107,7 +1114,7 @@
       // the (identical) headers inert without a second code path.
       html += "</tr></thead><tbody>";
       for (const row of sorted) {
-        const color = colorByActorId.get(row.actorId) || OTHER_COLOR;
+        const color = colorByActorId.get(row.actorId) || UNASSIGNED_COLOR;
         html += `<tr><td><span class="aap-tt-dot" style="background:${color}"></span>${escapeHtml(row.name)}</td>`;
         for (const col of TOOLTIP_COLUMNS.slice(1)) html += `<td>${col.fmt(row)}</td>`;
         html += "</tr>";
@@ -1116,7 +1123,7 @@
     } else if (lastData.indexing) {
       html += `<div class="aap-tt-note">Indexing Actors… ${lastData.progress ? `${lastData.progress.done}/${lastData.progress.total}` : ""}</div>`;
     } else {
-      html += `<div class="aap-tt-note">No paid Actor activity this day.</div>`;
+      html += `<div class="aap-tt-note">No revenue or runs this day.</div>`;
     }
     tooltip.innerHTML = html;
     tooltip.style.display = "block";

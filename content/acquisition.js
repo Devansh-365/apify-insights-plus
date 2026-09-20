@@ -47,6 +47,44 @@
     state.loadedAt = 0;
   });
 
+  // A closed-and-reopened tab loses all in-memory state, so on a fresh page
+  // load there is otherwise no way to avoid a full reload even for data that
+  // was just fetched a minute ago. Paint the last durably-cached table for
+  // the currently selected month immediately, then let ensureHost()'s normal
+  // TTL/silent-refresh path (see beginLoad()) decide whether to quietly
+  // bring it up to date.
+  //
+  // ensureHost() waits on restoreSettled before it will trigger a load.
+  // Without this, its 400ms poll starts firing as soon as the page's DOM
+  // exists, which is usually faster than AAP_API.whenReady() below (that
+  // needs the page to make its own first authenticated request) - so the
+  // poll would reliably win the race and call beginLoad() for real before
+  // this restore ever got to check the durable cache.
+  let restoreSettled = false;
+  (async () => {
+    try {
+      await AAP_API.whenReady?.();
+      if (state.requestId) return;
+      const month = monthStartAt();
+      const scope = AAP_API.authScope?.() || "";
+      const cached = await AAP_CACHE.getView("acquisition", refreshTtl(month), `${month}:${scope}`);
+      if (!cached.hit || state.requestId) return;
+      state.monthStartAt = month;
+      state.actors = cached.data.actors || [];
+      state.rows = cached.data.rows || [];
+      state.total = cached.data.total ?? null;
+      state.totalPrevious = cached.data.totalPrevious ?? null;
+      state.totalLoaded = cached.data.totalLoaded ?? false;
+      state.requestId = 1;
+      state.loadedAt = cached.updatedAt;
+      renderRows();
+    } catch {
+      // Best effort only; ensureHost() still triggers a normal load either way.
+    } finally {
+      restoreSettled = true;
+    }
+  })();
+
   function onOverviewRoute() {
     return ROUTE_RE.test(location.pathname) && !new URLSearchParams(location.search).has("actorId");
   }
@@ -495,7 +533,7 @@
     }
     if (created) renderRows();
     const month = monthStartAt();
-    if (state.showOriginal) return;
+    if (state.showOriginal || !restoreSettled) return;
     if (!state.requestId || state.monthStartAt !== month) { beginLoad(month, false); return; }
     if (Date.now() - state.loadedAt > refreshTtl(month)) beginLoad(month, false, true);
   }
@@ -546,6 +584,13 @@
       const rows = await loadActorRows(actors, month, previousMonth, portion, requestId, silent);
       if (requestId !== state.requestId) return;
       if (silent) state.rows = rows;
+      AAP_CACHE.setView?.("acquisition", {
+        actors: state.actors,
+        rows: state.rows,
+        total: state.total,
+        totalPrevious: state.totalPrevious,
+        totalLoaded: state.totalLoaded,
+      }, `${month}:${AAP_API.authScope?.() || ""}`);
     } catch (error) {
       if (requestId === state.requestId && !silent) state.error = `Couldn't load acquisition data${error?.message ? `: ${error.message}` : "."}`;
     } finally {
