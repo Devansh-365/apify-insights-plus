@@ -3,7 +3,7 @@
   const ROUTE_RE = /^(?:\/organization\/[^/]+)?\/actors\/insights\/acquisition\/?$/;
   const OVERVIEW_CLASS = "aap-acquisition-overview-page";
   const HOST_CLASS = "aap-acquisition-overview";
-  const MAX_CONCURRENT = 10;
+  const ACTOR_PAGE_SIZE = 25;
   const CACHE_CLEAR_KEY = "aap.cacheClearedAt";
 
   // Matches lib/api.js's cacheTtl(): current-month data settles quickly and
@@ -25,6 +25,7 @@
     loading: false,
     error: null,
     completed: 0,
+    detailLoading: false,
     totalLoaded: false,
     requestId: 0,
     loadedAt: 0,
@@ -40,6 +41,7 @@
     // not keep showing the previous account's acquisition data in that case.
     state.requestId++;
     state.loading = false;
+    state.detailLoading = false;
     state.monthStartAt = null;
     state.total = null;
     state.totalPrevious = null;
@@ -54,6 +56,7 @@
     if (area !== "local" || !changes[CACHE_CLEAR_KEY]) return;
     state.requestId++;
     state.loading = false;
+    state.detailLoading = false;
     state.monthStartAt = null;
     state.total = null;
     state.totalPrevious = null;
@@ -265,38 +268,107 @@
 
   async function loadActor(actor, month, previousMonth, portion) {
     const results = await Promise.allSettled([
-      AAP_API.acquisitionData(month, [actor.id]),
-      AAP_API.acquisitionData(previousMonth, [actor.id], { portionOfMonthElapsed: portion }),
+      AAP_API.acquisitionData(month, [actor.id], { priority: "foreground" }),
+      AAP_API.acquisitionData(previousMonth, [actor.id], { portionOfMonthElapsed: portion, priority: "foreground" }),
     ]);
     return {
       actor,
       data: results[0].status === "fulfilled" ? results[0].value : null,
       previous: results[1].status === "fulfilled" ? results[1].value : null,
       failed: results.some((result) => result.status === "rejected"),
+      loaded: true,
     };
   }
 
   async function loadActorRows(actors, month, previousMonth, portion, requestId, silent) {
-    const rows = new Array(actors.length);
-    let next = 0;
-    let completed = 0;
+    const completedBefore = state.completed;
+    const rows = await AAP_API.pooled(
+      actors,
+      (actor) => loadActor(actor, month, previousMonth, portion),
+      (completed) => {
+        if (requestId !== state.requestId || silent) return;
+        state.completed = completedBefore + completed;
+        renderRows();
+      },
+      { priority: silent ? "background" : "foreground" },
+    );
+    return rows.map((row, index) => row || {
+      actor: actors[index],
+      data: null,
+      previous: null,
+      failed: true,
+      loaded: true,
+    });
+  }
 
-    async function worker() {
-      while (next < actors.length) {
-        const index = next++;
-        rows[index] = await loadActor(actors[index], month, previousMonth, portion);
-        completed++;
-        if (requestId !== state.requestId) continue;
-        if (!silent) {
-          state.completed = completed;
-          state.rows = rows.filter(Boolean);
-          renderRows();
-        }
+  function placeholderRow(actor) {
+    return { actor, data: null, previous: null, failed: false, loaded: false, loading: true };
+  }
+
+  function mergeRows(rows) {
+    const byId = new Map(state.rows.map((row) => [row.actor.id, row]));
+    for (const row of rows || []) byId.set(row.actor.id, row);
+    state.rows = state.actors.filter((actor) => byId.has(actor.id)).map((actor) => byId.get(actor.id));
+  }
+
+  function ensureRows(actors) {
+    const existing = new Set(state.rows.map((row) => row.actor.id));
+    state.rows.push(...actors.filter((actor) => !existing.has(actor.id)).map(placeholderRow));
+    const order = new Map(state.actors.map((actor, index) => [actor.id, index]));
+    state.rows.sort((left, right) => order.get(left.actor.id) - order.get(right.actor.id));
+  }
+
+  function actorMatches(actor, query) {
+    return `${actor.title} ${actor.name}`.toLowerCase().includes(query.trim().toLowerCase());
+  }
+
+  async function loadActors(actors, month, previousMonth, portion, requestId, silent = false) {
+    if (!actors.length || state.detailLoading) return;
+    state.detailLoading = true;
+    ensureRows(actors);
+    if (!silent) renderRows();
+    try {
+      const rows = await loadActorRows(actors, month, previousMonth, portion, requestId, silent);
+      if (requestId !== state.requestId) return;
+      mergeRows(rows);
+      AAP_CACHE.setView?.("acquisition", {
+        actors: state.actors,
+        rows: state.rows,
+        total: state.total,
+        totalPrevious: state.totalPrevious,
+        totalLoaded: state.totalLoaded,
+      }, viewScope(month));
+    } finally {
+      if (requestId === state.requestId) {
+        state.detailLoading = false;
+        renderRows();
       }
     }
+  }
 
-    await Promise.all(Array.from({ length: Math.min(MAX_CONCURRENT, actors.length) }, worker));
-    return rows.filter(Boolean);
+  async function loadMoreActors(loadAll = false) {
+    if (state.detailLoading || !state.actors.length || !state.monthStartAt) return;
+    const requestId = state.requestId;
+    const loadedIds = new Set(state.rows.map((row) => row.actor.id));
+    const remaining = state.actors.filter((actor) => !loadedIds.has(actor.id));
+    const portion = comparisonPortion(state.monthStartAt);
+    if (!remaining.length) return;
+    if (loadAll) {
+      for (let index = 0; index < remaining.length; index += ACTOR_PAGE_SIZE) {
+        if (requestId !== state.requestId) return;
+        await loadActors(remaining.slice(index, index + ACTOR_PAGE_SIZE), state.monthStartAt, previousMonthStartAt(state.monthStartAt), portion, requestId);
+      }
+    } else {
+      await loadActors(remaining.slice(0, ACTOR_PAGE_SIZE), state.monthStartAt, previousMonthStartAt(state.monthStartAt), portion, requestId);
+    }
+  }
+
+  async function loadSearchMatches() {
+    if (state.detailLoading || !state.query.trim() || !state.actors.length) return;
+    const loadedIds = new Set(state.rows.map((row) => row.actor.id));
+    const matches = state.actors.filter((actor) => actorMatches(actor, state.query) && !loadedIds.has(actor.id));
+    if (!matches.length) return;
+    await loadActors(matches, state.monthStartAt, previousMonthStartAt(state.monthStartAt), comparisonPortion(state.monthStartAt), state.requestId);
   }
 
   function formatInteger(value) {
@@ -337,6 +409,10 @@
 
   function metricCell(row, key, sublabel) {
     const cell = createElement("td", "aap-acquisition-metric");
+    if (row.loading) {
+      cell.append(createElement("strong", null, "…"), createElement("small", null, "Loading"));
+      return cell;
+    }
     const delta = change(row, key);
     const changeLabel = createElement("small", `aap-acquisition-change ${delta === "new" || (delta != null && delta > 0) ? "aap-acquisition-change-positive" : delta != null && delta < 0 ? "aap-acquisition-change-negative" : ""}`, formatChange(delta));
     changeLabel.title = "Change compared with the previous month";
@@ -346,6 +422,10 @@
 
   function sourceCell(row, key, emptyText) {
     const cell = createElement("td", "aap-acquisition-source");
+    if (row.loading) {
+      cell.appendChild(createElement("span", "aap-acquisition-empty", "Loading…"));
+      return cell;
+    }
     const items = Array.isArray(row?.data?.[key]) ? row.data[key] : [];
     if (!items.length) {
       cell.appendChild(createElement("span", "aap-acquisition-empty", emptyText));
@@ -380,6 +460,10 @@
     return sortRows(state.rows.filter((row) => !query || `${row.actor.title} ${row.actor.name}`.toLowerCase().includes(query)));
   }
 
+  function loadedActorCount() {
+    return state.rows.filter((row) => row.loaded).length;
+  }
+
   function appendTableHeader(table) {
     const head = document.createElement("thead");
     const row = document.createElement("tr");
@@ -401,7 +485,8 @@
 
   function tableRow(row, total) {
     const tableRow = document.createElement("tr");
-    if (row.failed) tableRow.className = "aap-acquisition-row-partial";
+    if (row.loading) tableRow.className = "aap-acquisition-row-loading";
+    else if (row.failed) tableRow.className = "aap-acquisition-row-partial";
     tableRow.append(
       actorCell(row.actor, total),
       metricCell(row, "numUniqueViewingUsers", "unique viewers"),
@@ -437,9 +522,10 @@
   function renderRows() {
     if (!refs) return;
     const rows = filteredRows();
+    const loadedCount = loadedActorCount();
     refs.summary.textContent = state.loading
-      ? `Loading ${state.actors.length ? `${state.completed} of ${state.actors.length}` : "Actors"} · ${monthLabel(state.monthStartAt)}…`
-      : `${rows.length} of ${state.actors.length} Actors · ${monthLabel(state.monthStartAt)}`;
+      ? `Loading Actor list${state.actors.length ? ` · ${state.completed} of ${state.rows.length} details` : ""} · ${monthLabel(state.monthStartAt)}…`
+      : `Showing ${rows.length} matching Actors · ${loadedCount} details loaded · ${state.actors.length} total · ${monthLabel(state.monthStartAt)}`;
     if (state.error) refs.status.textContent = state.error;
     else refs.status.textContent = "";
 
@@ -457,13 +543,21 @@
 
     refs.body.replaceChildren();
     if (!rows.length) {
-      if (state.loading) return;
-      refs.body.appendChild(emptyTableRow(state.error ? "No acquisition data available." : "No Actors match this filter."));
-      return;
+      if (!state.loading) refs.body.appendChild(emptyTableRow(state.error ? "No acquisition data available." : "No Actors match this filter."));
+    } else {
+      for (const row of rows) refs.body.appendChild(tableRow(row, false));
     }
 
-    for (const row of rows) {
-      refs.body.appendChild(tableRow(row, false));
+    const remaining = Math.max(0, state.actors.length - state.rows.length);
+    if (refs.more) {
+      refs.more.hidden = !remaining;
+      refs.more.disabled = state.detailLoading;
+      refs.more.textContent = state.detailLoading ? "Loading…" : `Load more Actors (${Math.min(ACTOR_PAGE_SIZE, remaining)})`;
+    }
+    if (refs.all) {
+      refs.all.hidden = !remaining;
+      refs.all.disabled = state.detailLoading;
+      refs.all.textContent = state.detailLoading ? "Loading…" : "Load all Actors";
     }
   }
 
@@ -488,6 +582,7 @@
     search.addEventListener("input", () => {
       state.query = search.value;
       renderRows();
+      loadSearchMatches().catch(() => {});
     });
     const sort = document.createElement("select");
     sort.setAttribute("aria-label", "Sort Actors by");
@@ -513,7 +608,13 @@
     const refresh = createElement("button", "aap-acquisition-refresh", "Refresh");
     refresh.type = "button";
     refresh.addEventListener("click", () => beginLoad(monthStartAt(), true));
-    controls.append(search, sort, order, refresh);
+    const more = createElement("button", "aap-acquisition-more", "Load more Actors");
+    more.type = "button";
+    more.addEventListener("click", () => loadMoreActors(false));
+    const all = createElement("button", "aap-acquisition-more", "Load all Actors");
+    all.type = "button";
+    all.addEventListener("click", () => loadMoreActors(true));
+    controls.append(search, sort, order, refresh, more, all);
 
     const status = createElement("div", "aap-acquisition-status");
     function tableShell(label, bodyKey) {
@@ -536,7 +637,7 @@
     const totalSection = tableShell("All actors", "totalBody");
     const actorsSection = tableShell("Actors", "body");
     host.append(header, controls, status, totalSection, actorsSection);
-    refs = { summary, status, totalBody: totalSection.totalBody, body: actorsSection.body };
+    refs = { summary, status, more, all, totalBody: totalSection.totalBody, body: actorsSection.body };
     syncView();
     return host;
   }
@@ -562,6 +663,7 @@
     if (state.organization !== organization) {
       state.requestId++;
       state.loading = false;
+      state.detailLoading = false;
       state.monthStartAt = null;
       state.total = null;
       state.totalPrevious = null;
@@ -602,6 +704,7 @@
       state.total = null;
       state.totalPrevious = null;
       state.totalLoaded = false;
+      state.detailLoading = false;
       renderRows();
     }
     try {
@@ -621,23 +724,22 @@
       state.total = totals[0].status === "fulfilled" ? totals[0].value : null;
       state.totalPrevious = totals[1].status === "fulfilled" ? totals[1].value : null;
       state.totalLoaded = true;
-      if (!silent) renderRows();
-      const rows = await loadActorRows(actors, month, previousMonth, portion, requestId, silent);
+      if (!silent) {
+        state.rows = actors.slice(0, ACTOR_PAGE_SIZE).map(placeholderRow);
+        renderRows();
+      }
+      const actorsToLoad = silent
+        ? state.rows.filter((row) => row.loaded).map((row) => row.actor)
+        : actors.slice(0, ACTOR_PAGE_SIZE);
+      await loadActors(actorsToLoad, month, previousMonth, portion, requestId, silent);
       if (requestId !== state.requestId) return;
-      if (silent) state.rows = rows;
-      AAP_CACHE.setView?.("acquisition", {
-        actors: state.actors,
-        rows: state.rows,
-        total: state.total,
-        totalPrevious: state.totalPrevious,
-        totalLoaded: state.totalLoaded,
-      }, viewScope(month));
     } catch (error) {
       if (requestId === state.requestId && !silent) state.error = `Couldn't load acquisition data${error?.message ? `: ${error.message}` : "."}`;
     } finally {
       if (requestId === state.requestId) {
         state.loading = false;
         renderRows();
+        loadSearchMatches().catch(() => {});
       }
     }
   }

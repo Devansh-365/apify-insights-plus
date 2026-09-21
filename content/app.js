@@ -2,9 +2,8 @@
  * Overlays the native Monetization chart on
  * https://console.apify.com/actors/insights/monetization with our own
  * canvas, plus a small toolbar inserted just above it: one metric selector
- * (Revenue, Runs, or Results). Revenue is always stacked by Actor.
- * Hovering any day shows a tooltip with that day's full stats plus Actors
- * that earned revenue or ran that day. We draw our own chart (rather
+ * (Revenue, Runs, or Results). Revenue bars use the account-level aggregate;
+ * pinning a bar loads Actor details in the tooltip. We draw our own chart (rather
  * than reaching into Apify's) because it's a black-box Chart.js canvas with
  * no exposed instance to restyle or hook into.
  *
@@ -461,6 +460,11 @@
   let dayMetricsFetching = false;
   let breakdownRefreshedAt = 0;
   let cacheClearGeneration = 0;
+  const monthActorDetailCache = new Map();
+  let monthTooltipSession = null;
+  let monthTooltipLoadId = 0;
+  let monthPrefetchKey = null;
+  let monthPrefetchRun = 0;
 
   AAP_API.onTokenChange?.(() => {
     // A token change means the authenticated account may have changed. Drop
@@ -473,6 +477,11 @@
     indexRun++;
     lastData = null;
     colorByActorId = new Map();
+    monthActorDetailCache.clear();
+    monthTooltipSession = null;
+    monthTooltipLoadId++;
+    monthPrefetchKey = null;
+    monthPrefetchRun++;
     dayMetricsFetchedAt = 0;
     breakdownRefreshedAt = 0;
     customChartReady = false;
@@ -519,14 +528,14 @@
       // render normally.
     }
     if (loadGeneration !== cacheClearGeneration || loadKey !== scopeKey()) return;
-    let daily = cached?.daily || null;
-    let actorCount = cached?.actorCount ?? null;
+    let catalog = cached?.catalog || null;
+    let actorCount = cached?.actorCount ?? (catalog?.length || null);
     let indexedAt = cached?.updatedAt ?? null;
-    let indexing = !cached || cached.stale;
-    if (daily) colorByActorId = buildColorMap(daily);
+    let indexing = !catalog || cached.stale;
+    if (catalog) colorByActorId = buildColorMap(null, catalog);
 
-    if (cached?.dayMetrics) setData({ month, daily, actorCount, indexedAt, indexing, loading: true, partial: null, dayMetrics: cached.dayMetrics, progress: null });
-    else setData({ month, daily, actorCount, indexedAt, indexing, loading: true, partial: null, progress: null });
+    if (cached?.dayMetrics) setData({ month, daily: null, catalog, actorCount, indexedAt, indexing, loading: true, partial: null, dayMetrics: cached.dayMetrics, progress: null });
+    else setData({ month, daily: null, catalog, actorCount, indexedAt, indexing, loading: true, partial: null, progress: null });
 
     // Always fetch the cheap day totals (scoped to the native Actor filter,
     // if any) so the chart is accurate even while (or instead of) a full
@@ -536,12 +545,9 @@
     if (loadGeneration !== cacheClearGeneration || loadKey !== scopeKey()) return;
     let dayMetrics = freshDayMetrics || cached?.dayMetrics || lastData?.dayMetrics || null;
 
-    // A cache can be fresh by TTL yet already wrong: indexed before a new paid
-    // or run-only Actor became active. Re-index despite the TTL.
-    if (!indexing && breakdownMissingActivityDay(daily, dayMetrics)) indexing = true;
-
     if (!indexing) {
       setData({ loading: false, indexing: false, progress: null });
+      startMonthActorPrefetch(month, catalog, loadKey, loadGeneration);
       return;
     }
 
@@ -549,57 +555,44 @@
     try {
       const raw = await AAP_API.actorBreakdown(month, actorIds);
       const breakdown = Array.isArray(raw) ? raw : raw?.monetizationPerActor || [];
-      const actors = breakdown
-        .map((item) => ({
-          actorId: item.actor?._id,
-          actorName: item.actor?.title || item.actor?.name || item.actor?._id,
-          totalRevenueUsd: Number(item.earningsStats?.totalRevenueUsd) || 0,
-          totalCostUsd: Number(item.earningsStats?.totalCostUsd) || 0,
-        }))
-        .filter((a) => a.actorId);
-
-      const perActor = await AAP_API.pooled(
-        actors,
-        async (actor) => {
-          const [margin, runs] = await Promise.all([
-            AAP_API.profitMargin(month, [actor.actorId]),
-            AAP_API.runStatistics(month, [actor.actorId]),
-          ]);
-          return { actor, margin, runs };
-        },
-        (done, total) => {
-          if (myRun !== indexRun) return;
-          setData({ month, daily, actorCount: actors.length, indexedAt, indexing: true, dayMetrics, progress: { done, total } });
-        },
-      );
       if (myRun !== indexRun || loadGeneration !== cacheClearGeneration) return; // a newer month or cache generation started loading
 
-      daily = buildDailyIndex(perActor);
-      colorByActorId = buildColorMap(daily);
-      actorCount = actors.length;
+      const actorsById = new Map();
+      for (const item of breakdown) {
+        const actorId = item.actor?._id;
+        if (!actorId) continue;
+        const current = actorsById.get(actorId) || {
+          actorId,
+          name: item.actor?.title || item.actor?.name || actorId,
+          totalRevenueUsd: 0,
+          totalCostUsd: 0,
+          activeMonths: [month],
+        };
+        current.name = item.actor?.title || item.actor?.name || current.name;
+        current.totalRevenueUsd = Math.max(current.totalRevenueUsd, Number(item.earningsStats?.totalRevenueUsd) || 0);
+        current.totalCostUsd = Math.max(current.totalCostUsd, Number(item.earningsStats?.totalCostUsd) || 0);
+        actorsById.set(actorId, current);
+      }
+      catalog = [...actorsById.values()].sort((left, right) =>
+        Number(right.totalRevenueUsd > 0) - Number(left.totalRevenueUsd > 0)
+        || right.totalRevenueUsd - left.totalRevenueUsd
+        || left.name.localeCompare(right.name),
+      );
+      colorByActorId = buildColorMap(null, catalog);
+      actorCount = catalog.length;
       indexedAt = Date.now();
 
-      // A handful of per-Actor fetches can transiently fail (a network blip,
-      // the auth token racing readiness right after page load — see
-      // pooled()'s per-item catch). Caching that partial result would lock in
-      // an undercounted breakdown for the full 15-minute TTL, silently, since
-      // indexing:false looks identical to a clean run. Only cache complete
-      // passes; a partial one still renders (better than nothing) but the
-      // next page load retries instead of serving stale wrong data.
-      const failedCount = perActor.failures?.length || perActor.filter((e) => e === null).length;
-      const partial = failedCount ? { failedCount } : null;
-      if (failedCount === 0) {
-        try {
-          await AAP_CACHE.set(month, scope, { daily, actorCount, dayMetrics, filtered: actorIds.length > 0 });
-        } catch {
-          // Cached breakdowns are an optimization, not a prerequisite for a
-          // correct chart in the current tab.
-        }
+      try {
+        await AAP_CACHE.set(month, scope, { catalog, actorCount, dayMetrics, filtered: actorIds.length > 0 });
+      } catch {
+        // Cached catalogs are an optimization, not a prerequisite for a
+        // correct chart in the current tab.
       }
-      setData({ month, daily, actorCount, indexedAt, indexing: false, partial, dayMetrics, progress: null });
+      setData({ month, daily: null, catalog, actorCount, indexedAt, indexing: false, partial: null, dayMetrics, progress: null });
+      startMonthActorPrefetch(month, catalog, loadKey, loadGeneration);
     } catch (err) {
       if (myRun !== indexRun) return;
-      setData({ month, daily, actorCount, indexedAt, indexing: false, dayMetrics, progress: null, error: String(err) });
+      setData({ month, daily: null, catalog, actorCount, indexedAt, indexing: false, dayMetrics, progress: null, error: String(err) });
     }
   }
 
@@ -678,15 +671,64 @@
     return daily;
   }
 
+  function monthDetailEntry(actor, detail) {
+    return {
+      actorId: actor.actorId,
+      name: actor.name || actor.actorId,
+      margin: detail.margin,
+      runs: detail.runs,
+    };
+  }
+
+  // The aggregate chart is painted immediately. Fetch only the top colored
+  // Actors in the background so their daily revenue can progressively restore
+  // the familiar stacked bars without waiting for hundreds of Actor requests.
+  function startMonthActorPrefetch(month, catalog, loadKey, loadGeneration) {
+    if (monthPrefetchKey === loadKey) return;
+    monthPrefetchKey = loadKey;
+    const run = ++monthPrefetchRun;
+    const candidates = (catalog || [])
+      .filter((actor) => Number(actor.totalRevenueUsd) > 0)
+      .slice(0, TOP_N);
+    if (!candidates.length) return;
+
+    Promise.allSettled(candidates.map(async (actor) => {
+      const key = `${month}|${actor.actorId}`;
+      const cached = monthActorDetailCache.get(key);
+      if (cached?.entry) return cached.entry;
+      const detail = await AAP_API.actorDailyData(month, actor.actorId, { priority: "background" });
+      const entry = monthDetailEntry(actor, detail);
+      monthActorDetailCache.set(key, { entry });
+      return entry;
+    })).then((results) => {
+      if (run !== monthPrefetchRun || loadGeneration !== cacheClearGeneration || loadKey !== scopeKey()) return;
+      const entries = results
+        .filter((result) => result.status === "fulfilled")
+        .map((result) => result.value);
+      if (!entries.length) return;
+      const daily = buildDailyIndex(entries.map((entry) => ({
+        actor: { actorId: entry.actorId, actorName: entry.name },
+        margin: entry.margin,
+        runs: entry.runs,
+      })));
+      colorByActorId = buildColorMap(daily, catalog);
+      setData({ daily, prefetching: false });
+    }).catch(() => {});
+  }
+
   // Assigns stable colors to the top Actors ranked by total revenue across
   // the indexed month. Lower-revenue Actors remain visible as muted gray
   // entries instead of receiving additional colors.
-  function buildColorMap(daily) {
+  function buildColorMap(daily, catalog = []) {
     const totals = new Map();
-    for (const rows of Object.values(daily)) {
+    for (const rows of Object.values(daily || {})) {
       for (const row of rows) {
         totals.set(row.actorId, (totals.get(row.actorId) || 0) + (Number(row.revenue) || 0));
       }
+    }
+    for (const actor of catalog || []) {
+      if (!actor?.actorId) continue;
+      totals.set(actor.actorId, Math.max(totals.get(actor.actorId) || 0, Number(actor.totalRevenueUsd) || 0));
     }
     const ranked = [...totals.entries()]
       .filter(([, revenue]) => revenue > 0)
@@ -901,13 +943,14 @@
 
         let acc = 0;
         const grouped = new Map();
-        for (const row of lastData.daily?.[day] || []) {
+        const rows = lastData.daily?.[day] || [];
+        for (const row of rows) {
           const key = colorByActorId.get(row.actorId) || UNASSIGNED_COLOR;
           grouped.set(key, (grouped.get(key) || 0) + (Number(row.revenue) || 0));
         }
         const accounted = [...grouped.values()].reduce((sum, value) => sum + value, 0);
         const unassigned = Math.max(0, total - accounted);
-        if (unassigned > 0) grouped.set(UNASSIGNED_COLOR, (grouped.get(UNASSIGNED_COLOR) || 0) + unassigned);
+        if (unassigned > 0) grouped.set(rows.length ? UNASSIGNED_COLOR : METRICS[0].color, (grouped.get(rows.length ? UNASSIGNED_COLOR : METRICS[0].color) || 0) + unassigned);
         // Keep the API's row order for the stack. Colors remain stable per
         // Actor even when the set of earning Actors changes by day.
         const sumRows = [...grouped.entries()];
@@ -1012,6 +1055,7 @@
     tooltipSort = { key: primaryMetric(), dir: "desc" };
     renderTooltip();
     positionTooltip(e.clientX, e.clientY);
+    loadMonthTooltipActors();
   }
 
   document.addEventListener("click", (e) => {
@@ -1046,6 +1090,68 @@
   let tooltipDay = null;
   let tooltipSort = { key: "revenue", dir: "desc" };
 
+  function ensureMonthTooltipSession(day) {
+    const key = `${scopeKey() || ""}|${day || ""}`;
+    if (!monthTooltipSession || monthTooltipSession.key !== key) {
+      monthTooltipSession = {
+        key,
+        candidates: (lastData?.catalog || []).filter((actor) => actor?.actorId),
+        details: new Map(),
+        requestedIds: new Set(),
+        failedTasks: [],
+        nextIndex: 0,
+        loading: false,
+        loadId: ++monthTooltipLoadId,
+      };
+    }
+    return monthTooltipSession;
+  }
+
+  async function loadMonthTooltipActors(retry = false) {
+    if (!lastData || tooltipDay == null || pinnedDay == null) return;
+    const session = ensureMonthTooltipSession(tooltipDay);
+    if (session.loading) return;
+    const tasks = retry
+      ? [...session.failedTasks]
+      : session.candidates.slice(session.nextIndex, session.nextIndex + tooltipActorCount).map((candidate) => ({
+        candidate,
+        key: `${state.month}|${candidate.actorId}`,
+      }));
+    if (!retry) {
+      session.nextIndex += tasks.length;
+      for (const task of tasks) session.requestedIds.add(task.candidate.actorId);
+    } else {
+      session.failedTasks = [];
+    }
+    if (!tasks.length) {
+      renderTooltip();
+      return;
+    }
+    session.loading = true;
+    renderTooltip();
+    const loadId = session.loadId;
+    const results = await Promise.allSettled(tasks.map(async (task) => {
+      const cached = monthActorDetailCache.get(task.key);
+      if (cached?.entry) return { task, entry: cached.entry };
+      const detail = await AAP_API.actorDailyData(state.month, task.candidate.actorId, { priority: "foreground" });
+      const entry = {
+        actorId: task.candidate.actorId,
+        name: task.candidate.name || task.candidate.actorId,
+        margin: detail.margin,
+        runs: detail.runs,
+      };
+      monthActorDetailCache.set(task.key, { entry });
+      return { task, entry };
+    }));
+    if (monthTooltipSession !== session || session.loadId !== loadId) return;
+    for (const [index, result] of results.entries()) {
+      if (result.status === "fulfilled") session.details.set(result.value.task.key, result.value.entry);
+      else session.failedTasks.push(tasks[index]);
+    }
+    session.loading = false;
+    renderTooltip();
+  }
+
   function showTooltip(clientX, clientY, day) {
     if (day !== tooltipDay) {
       tooltipDay = day;
@@ -1065,6 +1171,11 @@
     // tooltip right after every sort click.
     e.stopPropagation();
     if (e.target.closest(".aap-tt-close")) return hideTooltip();
+    const action = e.target.closest("button[data-action]")?.dataset.action;
+    if (action === "more" || action === "retry") {
+      loadMonthTooltipActors(action === "retry");
+      return;
+    }
     const th = e.target.closest("th[data-sort]");
     if (!th || tooltipDay == null) return;
     const key = th.dataset.sort;
@@ -1113,35 +1224,31 @@
     html += "</div>";
     if (lastData.partial) html += `<div class="aap-tt-note">Some Actor data could not be loaded; retrying.</div>`;
 
-    // Include Actors that earned revenue or ran at least once on this day.
-    // The setting limits the highest-ranked Actors across the loaded month;
-    // sorting changes row order only and never changes that membership.
-    const eligibleActors = (lastData.daily?.[day] || []).filter((row) => Number(row.revenue) > 0 || Number(row.runs) > 0);
-    const rankedActors = tooltipActorRanking(lastData.daily);
-    const rankingIndex = new Map(rankedActors.map((row, index) => [row.actorId, index]));
-    const visibleActorIds = new Set(rankedActors.slice(0, tooltipActorCount).map((row) => row.actorId));
-    const actors = eligibleActors.filter((row) => visibleActorIds.has(row.actorId));
-
-    if (actors.length) {
+    const session = ensureMonthTooltipSession(day);
+    const actors = AAPR.actorRowsForDays([...session.details.values()], [day]);
+    const ranking = session.candidates;
+    const rankingIndex = new Map(ranking.map((actor, index) => [actor.actorId, index]));
+    if (!pinnedDay) {
+      html += `<div class="aap-tt-note">Click the bar to load up to ${tooltipActorCount} Actor details.</div>`;
+    } else if (session.loading) {
+      html += `<div class="aap-tt-subtitle">Loading Actor details… showing ${actors.length} loaded</div>`;
+    } else if (actors.length) {
       const sortDir = tooltipSort.dir === "asc" ? 1 : -1;
       const sorted = [...actors].sort((a, b) => {
         const comparison = tooltipSort.key === "name"
-          ? a.name.localeCompare(b.name)
+          ? String(a.name || a.actorId).localeCompare(String(b.name || b.actorId))
           : (a[tooltipSort.key] || 0) - (b[tooltipSort.key] || 0);
         if (comparison) return sortDir * comparison;
-        return (rankingIndex.get(a.actorId) ?? rankedActors.length) - (rankingIndex.get(b.actorId) ?? rankedActors.length);
+        return (rankingIndex.get(a.actorId) ?? ranking.length) - (rankingIndex.get(b.actorId) ?? ranking.length);
       });
 
-      html += `<div class="aap-tt-subtitle">Showing ${actors.length} of ${eligibleActors.length} eligible Actors</div>`;
+      html += `<div class="aap-tt-subtitle">Showing ${actors.length} loaded Actors · ${session.requestedIds.size} of ${session.candidates.length} candidates</div>`;
       html += '<table class="aap-tt-table"><thead><tr>';
       for (const col of TOOLTIP_COLUMNS) {
         const isSortCol = tooltipSort.key === col.sort;
         const arrow = isSortCol ? `<span class="aap-tt-sort-arrow">${tooltipSort.dir === "asc" ? "▲" : "▼"}</span>` : "";
         html += `<th data-sort="${col.sort}" class="${isSortCol ? "aap-tt-sorted" : ""}">${col.label}${arrow}</th>`;
       }
-      // pinned/unpinned only changes interactivity via CSS (.aap-tt-pinned),
-      // not this markup — pointer-events:none on the unpinned tooltip makes
-      // the (identical) headers inert without a second code path.
       html += "</tr></thead><tbody>";
       for (const row of sorted) {
         const color = colorByActorId.get(row.actorId) || UNASSIGNED_COLOR;
@@ -1150,10 +1257,19 @@
         html += "</tr>";
       }
       html += "</tbody></table>";
-    } else if (lastData.indexing) {
-      html += `<div class="aap-tt-note">Indexing Actors… ${lastData.progress ? `${lastData.progress.done}/${lastData.progress.total}` : ""}</div>`;
     } else {
-      html += `<div class="aap-tt-note">No revenue or runs this day.</div>`;
+      html += `<div class="aap-tt-note">${session.candidates.length ? "No loaded Actor had revenue or runs this day." : "No active Actors were included in the monthly catalog."}</div>`;
+    }
+    if (pinnedDay) {
+      if (session.failedTasks.length) {
+        html += `<div class="aap-tt-note">${session.failedTasks.length} Actor detail request${session.failedTasks.length === 1 ? "" : "s"} failed.</div>`;
+        html += `<button type="button" class="aap-tt-action" data-action="retry"${session.loading ? " disabled" : ""}>Retry failed details</button>`;
+      }
+      if (session.nextIndex < session.candidates.length) {
+        html += `<button type="button" class="aap-tt-action" data-action="more"${session.loading ? " disabled" : ""}>Load more Actors</button>`;
+      } else if (!session.loading && !session.failedTasks.length && session.requestedIds.size) {
+        html += `<div class="aap-tt-note">All catalog Actors loaded for this day.</div>`;
+      }
     }
     tooltip.innerHTML = html;
     tooltip.style.display = "block";

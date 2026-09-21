@@ -118,6 +118,26 @@ assert.equal(weekly.runsSummary.maximum, 7);
 assert.equal(weekly.resultsSummary.average, 5.5);
 assert.equal(weekly.resultsSummary.maximum, 11);
 assert.equal(weekly.costsSummary.maximum, (0.25 * 5 + 0.5 * 6) / 11);
+assert.deepEqual(Array.from(weekly.daily["2026-01-26"].sourceDays), ["2026-01-31", "2026-02-01"]);
+
+const crossMonthActor = range.actorRowsForDays([
+  {
+    actorId: "actor-a",
+    name: "Actor A",
+    margin: { dailyProfitMarginStats: { "2026-01-31": { payingUsersUsd: { revenueUsd: 2, costUsd: 1, profitUsd: 1 } } } },
+    runs: { dailyStats: { "2026-01-31": { TOTAL: 2, RESULTS: 3 } } },
+  },
+  {
+    actorId: "actor-a",
+    name: "Actor A",
+    margin: { dailyProfitMarginStats: { "2026-02-01": { payingUsersUsd: { revenueUsd: 3, costUsd: 1, profitUsd: 2 } } } },
+    runs: { dailyStats: { "2026-02-01": { TOTAL: 4, RESULTS: 5 } } },
+  },
+], ["2026-01-31", "2026-02-01"]);
+assert.equal(crossMonthActor.length, 1);
+assert.equal(crossMonthActor[0].revenue, 5);
+assert.equal(crossMonthActor[0].runs, 6);
+assert.equal(crossMonthActor[0].results, 8);
 
 const daily = range.group(data, "day");
 assert.deepEqual(Array.from(daily.days), ["2026-01-31", "2026-02-01", "2026-02-02"]);

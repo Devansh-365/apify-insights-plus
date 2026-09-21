@@ -4,6 +4,6 @@
   "scripts": {
     "build": "mkdir -p dist && zip -qr -FS dist/Apify-Insights-Plus-0.0.1.zip manifest.json content lib popup icons README.md",
     "check": "for file in content/*.js lib/*.js popup/*.js; do node --check \"$file\"; done && node -e \"JSON.parse(require('fs').readFileSync('manifest.json'))\"",
-    "test": "node test/range.test.js && node test/context-cache.test.js && node test/api.test.js"
+    "test": "node test/range.test.js && node test/context-cache.test.js && node test/api.test.js && node test/performance.test.js"
   }
 }

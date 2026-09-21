@@ -98,15 +98,22 @@ window.dispatchEvent(new SimpleCustomEvent("aap-auth-scope", { detail: "account-
 
   const range = await context.self.AAP_API.rangeData("2026-01-01", "2026-02-02", []);
   assert.equal(range.months.length, 2);
-  const actorRequests = requests.filter((url) => url.searchParams.has("actorIds"));
-  assert.equal(actorRequests.filter((url) => url.searchParams.get("actorIds") === "actor-a").length, 4);
-  assert.equal(actorRequests.filter((url) => url.searchParams.get("actorIds") === "actor-b").length, 2);
-  assert.equal(actorRequests.some((url) => url.searchParams.get("actorIds") === "actor-b" && url.searchParams.get("month") === "2026-02-01"), false);
-  assert.equal(range.partial.failedCount, 1);
-  assert.equal(range.partial.failedActors.length, 1);
-  assert.equal(range.partial.failedActors[0].actorId, "actor-b");
-  assert.equal(range.partial.failedActors[0].month, "2026-01-01");
-  console.log("API pooling and range request tests passed");
+  assert.equal(requests.filter((url) => url.searchParams.has("actorIds")).length, 0, "rangeData must not fetch Actor detail rows");
+  assert.deepEqual(Array.from(range.actorCatalogByMonth["2026-01-01"].map((actor) => actor.actorId)), ["actor-a", "actor-b"]);
+  assert.deepEqual(Array.from(range.actorCatalogByMonth["2026-01-01"][0].activeMonths), ["2026-01-01"]);
+  assert.equal(range.actorCatalog.find((actor) => actor.actorId === "actor-a").totalRevenueUsd, 12);
+  assert.deepEqual(Array.from(range.actorCatalog.find((actor) => actor.actorId === "actor-b").activeMonths), ["2026-01-01"]);
+
+  const beforeDetails = requests.length;
+  const details = await Promise.all([
+    context.self.AAP_API.actorDailyData("2026-01-01", "actor-a"),
+    context.self.AAP_API.actorDailyData("2026-01-01", "actor-a"),
+  ]);
+  const detailRequests = requests.slice(beforeDetails).filter((url) => url.searchParams.get("actorIds") === "actor-a");
+  assert.equal(detailRequests.length, 2, "identical concurrent Actor detail requests should be deduplicated");
+  assert.equal(details[0].actorId, "actor-a");
+  assert.equal(details[1].margin, details[0].margin);
+  console.log("API pooling, deduplication, and lazy range request tests passed");
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;

@@ -10,7 +10,7 @@ vm.runInNewContext(fs.readFileSync("lib/context.js", "utf8"), context);
 assert.equal(context.self.AAP_CONTEXT.organizationKey(), "org-acme-123");
 assert.equal(context.self.AAP_CONTEXT.organizationKey("/actors/insights/monetization"), "personal");
 
-const store = { "aap.cacheVersion": "5" };
+const store = { "aap.cacheVersion": "6" };
 const changeListeners = [];
 const storage = {
   async get(keys) {
@@ -57,6 +57,42 @@ vm.runInNewContext(fs.readFileSync("lib/cache.js", "utf8"), cacheContext);
   const removed = await cacheContext.self.AAP_CACHE.clearAll();
   assert.equal(removed, 1);
   assert.equal((await cacheContext.self.AAP_CACHE.getView("quality", 60_000, "org-acme")).hit, false);
+
+  const oldStore = {
+    "aap.cacheVersion": "5",
+    "aap.breakdown.old": { updatedAt: Date.now() },
+    "aap.api.old": { url: "https://example.test/old" },
+    "aap.view.old": { data: { rows: ["old"] }, updatedAt: Date.now() },
+  };
+  const oldListeners = [];
+  const oldStorage = {
+    async get(keys) {
+      if (keys == null) return { ...oldStore };
+      const requested = Array.isArray(keys) ? keys : [keys];
+      return Object.fromEntries(requested.filter((key) => key in oldStore).map((key) => [key, oldStore[key]]));
+    },
+    async set(values) {
+      for (const [key, value] of Object.entries(values)) oldStore[key] = value;
+      oldListeners.forEach((listener) => listener({}, "local"));
+    },
+    async remove(keys) {
+      for (const key of Array.isArray(keys) ? keys : [keys]) delete oldStore[key];
+    },
+  };
+  const oldCacheContext = {
+    self: {},
+    chrome: {
+      storage: {
+        local: oldStorage,
+        onChanged: { addListener(listener) { oldListeners.push(listener); } },
+      },
+    },
+    console,
+  };
+  vm.runInNewContext(fs.readFileSync("lib/cache.js", "utf8"), oldCacheContext);
+  await oldCacheContext.self.AAP_CACHE.getView("quality", 60_000, "org-acme");
+  assert.equal(oldStore["aap.cacheVersion"], "6");
+  assert.equal(Object.keys(oldStore).some((key) => key.includes("old")), false, "cache version changes must remove incompatible entries");
   console.log("context and cache tests passed");
 })().catch((error) => {
   console.error(error);

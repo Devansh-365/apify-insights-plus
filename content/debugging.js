@@ -4,6 +4,7 @@
   const OVERVIEW_CLASS = "aap-debugging-overview-page";
   const HOST_CLASS = "aap-debugging-overview";
   const MAX_RUNS_PER_PAGE = 100;
+  const ACTOR_PAGE_SIZE = 25;
   const CACHE_CLEAR_KEY = "aap.cacheClearedAt";
 
   // Matches lib/api.js's cacheTtl(): current-month data settles quickly and
@@ -27,6 +28,7 @@
     loading: false,
     error: null,
     completed: 0,
+    detailLoading: false,
     requestId: 0,
     loadedAt: 0,
     runs: [],
@@ -49,6 +51,7 @@
     state.requestId++;
     state.contextKey = null;
     state.loading = false;
+    state.detailLoading = false;
     state.actors = [];
     state.rows = [];
     state.total = null;
@@ -63,6 +66,7 @@
     state.requestId++;
     state.contextKey = null;
     state.loading = false;
+    state.detailLoading = false;
     state.error = null;
     state.actors = [];
     state.rows = [];
@@ -200,6 +204,89 @@
         pictureUrl: actor?.pictureUrl || "",
       }))
       .filter((actor) => actor.id && !seen.has(actor.id) && seen.add(actor.id));
+  }
+
+  function placeholderRow(actor) {
+    return { actor, stats: null, failed: false, loaded: false, loading: true };
+  }
+
+  function mergeRows(rows) {
+    const byId = new Map(state.rows.map((row) => [row.actor.id, row]));
+    for (const row of rows || []) byId.set(row.actor.id, row);
+    state.rows = state.actors.filter((actor) => byId.has(actor.id)).map((actor) => byId.get(actor.id));
+  }
+
+  function ensureRows(actors) {
+    const existing = new Set(state.rows.map((row) => row.actor.id));
+    state.rows.push(...actors.filter((actor) => !existing.has(actor.id)).map(placeholderRow));
+    const order = new Map(state.actors.map((actor, index) => [actor.id, index]));
+    state.rows.sort((left, right) => order.get(left.actor.id) - order.get(right.actor.id));
+  }
+
+  function actorMatches(actor, query) {
+    return `${actor.title} ${actor.name}`.toLowerCase().includes(query.trim().toLowerCase());
+  }
+
+  async function loadOverviewActors(actors, monthStartAt, requestId, silent = false) {
+    if (!actors.length || state.detailLoading) return;
+    state.detailLoading = true;
+    ensureRows(actors);
+    if (!silent) renderRows();
+    const completedBefore = state.completed;
+    try {
+      const rows = await AAP_API.pooled(
+        actors,
+        async (actor) => {
+          try {
+            return {
+              actor,
+              stats: statsFor(await AAP_API.runStatistics(monthStartAt, [actor.id], { priority: silent ? "background" : "foreground" })),
+              failed: false,
+              loaded: true,
+            };
+          } catch {
+            return { actor, stats: null, failed: true, loaded: true };
+          }
+        },
+        (completed) => {
+          if (requestId !== state.requestId || silent) return;
+          state.completed = completedBefore + completed;
+          renderRows();
+        },
+        { priority: silent ? "background" : "foreground" },
+      );
+      if (requestId !== state.requestId) return;
+      mergeRows(rows.map((row, index) => row || { actor: actors[index], stats: null, failed: true, loaded: true }));
+      AAP_CACHE.setView?.("debugging", { actors: state.actors, rows: state.rows, total: state.total }, viewScope(monthStartAt));
+    } finally {
+      if (requestId === state.requestId) {
+        state.detailLoading = false;
+        renderRows();
+      }
+    }
+  }
+
+  async function loadMoreActors(loadAll = false) {
+    if (state.detailLoading || state.selectedActorId || !state.actors.length) return;
+    const requestId = state.requestId;
+    const loadedIds = new Set(state.rows.map((row) => row.actor.id));
+    const remaining = state.actors.filter((actor) => !loadedIds.has(actor.id));
+    if (!remaining.length) return;
+    if (loadAll) {
+      for (let index = 0; index < remaining.length; index += ACTOR_PAGE_SIZE) {
+        if (requestId !== state.requestId) return;
+        await loadOverviewActors(remaining.slice(index, index + ACTOR_PAGE_SIZE), state.monthStartAt, requestId);
+      }
+    } else {
+      await loadOverviewActors(remaining.slice(0, ACTOR_PAGE_SIZE), state.monthStartAt, requestId);
+    }
+  }
+
+  async function loadSearchMatches() {
+    if (state.detailLoading || state.selectedActorId || !state.query.trim() || !state.actors.length) return;
+    const loadedIds = new Set(state.rows.map((row) => row.actor.id));
+    const matches = state.actors.filter((actor) => actorMatches(actor, state.query) && !loadedIds.has(actor.id));
+    if (matches.length) await loadOverviewActors(matches, state.monthStartAt, state.requestId);
   }
 
   function number(value) {
@@ -341,6 +428,10 @@
     });
   }
 
+  function loadedActorCount() {
+    return state.rows.filter((row) => row.loaded).length;
+  }
+
   function actorLink(actor) {
     const url = new URL(location.href);
     url.searchParams.set("actorId", actor.id);
@@ -429,7 +520,8 @@
 
   function chartRow(row, total = false) {
     const tableRow = document.createElement("tr");
-    if (row.failed) tableRow.className = "aap-debugging-row-partial";
+    if (row.loading) tableRow.className = "aap-debugging-row-loading";
+    else if (row.failed) tableRow.className = "aap-debugging-row-partial";
     tableRow.append(actorCell(row.actor, total), summaryCell(row.stats), chartCell(row));
     return tableRow;
   }
@@ -537,6 +629,8 @@
     refs.selectedSection.hidden = !selected;
     refs.runsSection.hidden = !selected;
     if (refs.showAll) refs.showAll.hidden = !selected;
+    if (refs.more) refs.more.hidden = selected;
+    if (refs.all) refs.all.hidden = selected;
 
     if (selected) {
       const row = state.rows[0] || {
@@ -548,9 +642,10 @@
       refs.selectedBody.replaceChildren(chartRow(row));
       renderRunRows();
     } else {
+      const loadedCount = loadedActorCount();
       refs.summary.textContent = state.loading
-        ? `Loading ${state.actors.length ? `${state.completed} of ${state.actors.length}` : "Actors"} · ${monthLabel(state.monthStartAt)}…`
-        : `${sortedRows().length} of ${state.actors.length} Actors · ${monthLabel(state.monthStartAt)}`;
+        ? `Loading Actor list${state.actors.length ? ` · ${state.completed} of ${state.rows.length} details` : ""} · ${monthLabel(state.monthStartAt)}…`
+        : `Showing ${sortedRows().length} matching Actors · ${loadedCount} details loaded · ${state.actors.length} total · ${monthLabel(state.monthStartAt)}`;
       refs.status.textContent = state.error || "";
       refs.overviewBody.replaceChildren();
       if (state.total) refs.overviewBody.appendChild(chartRow({ actor: { id: "__all__", title: "All actors", name: "Account total" }, stats: state.total }, true));
@@ -558,6 +653,17 @@
       refs.actorsBody.replaceChildren();
       for (const row of sortedRows()) refs.actorsBody.appendChild(chartRow(row));
       if (!sortedRows().length && !state.loading) refs.actorsBody.appendChild(emptyTableRow(state.error || "No Actor run data available."));
+      const remaining = Math.max(0, state.actors.length - state.rows.length);
+      if (refs.more) {
+        refs.more.hidden = !remaining;
+        refs.more.disabled = state.detailLoading;
+        refs.more.textContent = state.detailLoading ? "Loading…" : `Load more Actors (${Math.min(ACTOR_PAGE_SIZE, remaining)})`;
+      }
+      if (refs.all) {
+        refs.all.hidden = !remaining;
+        refs.all.disabled = state.detailLoading;
+        refs.all.textContent = state.detailLoading ? "Loading…" : "Load all Actors";
+      }
     }
     if (selected) {
       refs.summary.textContent = state.loading ? `Loading selected Actor · ${monthLabel(state.monthStartAt)}…` : refs.selectedSummary.textContent;
@@ -584,6 +690,7 @@
     search.addEventListener("input", () => {
       state.query = search.value;
       renderRows();
+      loadSearchMatches().catch(() => {});
     });
     const showAll = document.createElement("a");
     showAll.className = "aap-debugging-show-all";
@@ -616,7 +723,13 @@
     const refresh = createElement("button", "aap-debugging-refresh", "Refresh");
     refresh.type = "button";
     refresh.addEventListener("click", () => beginLoad(currentMonthStartAt(), currentActorId(), true));
-    controls.append(search, sort, order, refresh, showAll);
+    const more = createElement("button", "aap-debugging-more", "Load more Actors");
+    more.type = "button";
+    more.addEventListener("click", () => loadMoreActors(false));
+    const all = createElement("button", "aap-debugging-more", "Load all Actors");
+    all.type = "button";
+    all.addEventListener("click", () => loadMoreActors(true));
+    controls.append(search, sort, order, refresh, more, all, showAll);
     header.append(heading, summary);
     const status = createElement("div", "aap-debugging-status");
 
@@ -690,6 +803,8 @@
       sort,
       order,
       showAll,
+      more,
+      all,
       overviewSection,
       overviewBody: overviewSection.overviewBody,
       actorsSection,
@@ -788,56 +903,35 @@
         state.rows = [{ actor: selected, stats: null, failed: false }];
         renderRows();
         const [statsResult] = await Promise.allSettled([
-          AAP_API.runStatistics(monthStartAt, [selected.id]),
+          AAP_API.runStatistics(monthStartAt, [selected.id], { priority: "foreground" }),
           loadRunsPage(selected.id, requestId, true),
         ]);
         if (requestId !== state.requestId) return;
-        if (statsResult.status === "fulfilled") state.rows = [{ actor: selected, stats: statsFor(statsResult.value), failed: false }];
+        if (statsResult.status === "fulfilled") state.rows = [{ actor: selected, stats: statsFor(statsResult.value), failed: false, loaded: true }];
         else {
-          state.rows = [{ actor: selected, stats: null, failed: true }];
+          state.rows = [{ actor: selected, stats: null, failed: true, loaded: true }];
           state.error = "Could not load the selected Actor's success-rate data.";
         }
       } else {
-        const actorRows = new Array(actors.length);
         if (!silent) {
-          state.rows = actors.map((item) => ({ actor: item, stats: null, failed: false }));
+          state.rows = actors.slice(0, ACTOR_PAGE_SIZE).map(placeholderRow);
           renderRows();
         }
-        const actorPromise = AAP_API.pooled(actors, async (item, index) => {
-          try {
-            const row = { actor: item, stats: statsFor(await AAP_API.runStatistics(monthStartAt, [item.id])), failed: false };
-            actorRows[index] = row;
-            return row;
-          } catch {
-            const row = { actor: item, stats: null, failed: true };
-            actorRows[index] = row;
-            return row;
-          }
-        }, (completed) => {
-          if (requestId !== state.requestId) return;
-          if (!silent) {
-            state.completed = completed;
-            state.rows = actors.map((item, index) => actorRows[index] || { actor: item, stats: null, failed: false });
-            renderRows();
-          }
-        });
-        const [actorResult] = await Promise.allSettled([actorPromise]);
+        const actorsToLoad = silent
+          ? state.rows.filter((row) => row.loaded).map((row) => row.actor)
+          : actors.slice(0, ACTOR_PAGE_SIZE);
+        await loadOverviewActors(actorsToLoad, monthStartAt, requestId, silent);
         await totalTask;
         if (requestId !== state.requestId) return;
-        state.rows = actorResult.status === "fulfilled" ? actorResult.value.filter(Boolean) : [];
-        AAP_CACHE.setView?.("debugging", {
-          actors: state.actors,
-          rows: state.rows,
-          total: state.total,
-        }, viewScope(monthStartAt));
       }
     } catch (error) {
       if (requestId === state.requestId && !silent) state.error = `Couldn't load debugging data${error?.message ? `: ${error.message}` : "."}`;
     } finally {
       if (requestId === state.requestId) {
         state.loading = false;
-        state.completed = state.actors.length;
+        state.detailLoading = false;
         renderRows();
+        loadSearchMatches().catch(() => {});
       }
     }
   }

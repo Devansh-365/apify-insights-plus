@@ -9,7 +9,10 @@
   const VIEW_KEY = "aap.monetizationView.v2";
   const CACHE_CLEAR_KEY = "aap.cacheClearedAt";
   const HISTORICAL_CACHE_TTL_MS = 15 * 60 * 1000;
-  const CURRENT_MONTH_CACHE_TTL_MS = 60 * 1000;
+  // Keep the range snapshot stable for a few minutes. Live day totals are
+  // still refreshed separately, while the expensive multi-month range is
+  // refreshed in the background without replacing the visible chart.
+  const CURRENT_MONTH_CACHE_TTL_MS = 5 * 60 * 1000;
   const PARTIAL_RETRY_MS = 30 * 1000;
   const MAX_MEMORY_CACHE_ENTRIES = 8;
   const CONTROL_CLASS = "aap-range-selector";
@@ -64,17 +67,26 @@
     partial: null,
     error: null,
     loading: false,
+    refreshing: false,
     loadedKey: null,
     retryAt: 0,
     loadId: 0,
   };
 
   const memoryCache = new Map();
+  const actorDetailCache = new Map();
+  let tooltipLoadId = 0;
+  let actorPrefetchKey = null;
+  let actorPrefetchRun = 0;
   let tooltipActorCount = DEFAULT_TOOLTIP_ACTOR_COUNT;
   AAP_API.onTokenChange?.(() => {
     // A tab can stay open while the user logs out or switches accounts. Do
     // not retain or display the previous account's range data in that case.
     memoryCache.clear();
+    actorDetailCache.clear();
+    tooltipLoadId++;
+    actorPrefetchKey = null;
+    actorPrefetchRun++;
     resetRangeData();
     if (state.view === "custom" && validRange(state.range) && state.observedMonth) {
       renderRangeView();
@@ -85,10 +97,14 @@
     if (area !== "local") return;
     if (changes[CACHE_CLEAR_KEY]) {
       memoryCache.clear();
-      state.loadedKey = null;
+      actorDetailCache.clear();
+      tooltipLoadId++;
+      actorPrefetchKey = null;
+      actorPrefetchRun++;
       state.retryAt = 0;
       state.loadId++;
       state.loading = false;
+      state.refreshing = false;
       // Keep the current chart on screen while the cleared range is fetched
       // again, instead of replacing it with a blank loading state.
       if (state.view === "custom" && validRange(state.range) && state.observedMonth) loadRange();
@@ -118,6 +134,7 @@
     index: null,
     x: 0,
     y: 0,
+    session: null,
   };
   let lastPath = location.pathname;
   let pageThemeSignature = "";
@@ -192,7 +209,12 @@
     state.loadedKey = null;
     state.retryAt = 0;
     state.loading = false;
+    state.refreshing = false;
     state.loadId++;
+    actorDetailCache.clear();
+    tooltipLoadId++;
+    actorPrefetchKey = null;
+    actorPrefetchRun++;
   }
 
   function setActorScope(actorIds) {
@@ -524,7 +546,7 @@
       if (!custom) controlsStatus.textContent = "";
       else if (state.error) controlsStatus.textContent = "Range could not be loaded";
       else if (state.partial) controlsStatus.textContent = `${state.partial.failedCount} Actor${state.partial.failedCount === 1 ? "" : "s"} unavailable — retrying`;
-      else if (state.loading) controlsStatus.textContent = "Loading range…";
+      else if (state.loading && !state.data) controlsStatus.textContent = "Loading range…";
       else if (validRange(state.range) && state.data) controlsStatus.textContent = countLabel(state.data.days.length);
       else controlsStatus.textContent = "";
     }
@@ -543,7 +565,11 @@
     const selected = groupingSelect?.value;
     state.grouping = selected === "day" || selected === "month" ? selected : "week";
     storageSet({ [GROUPING_KEY]: state.grouping });
-    if (state.rawData) state.data = AAPR.group(state.rawData, state.grouping);
+    if (state.rawData) {
+      const actorDetails = state.data?.actorDetails || new Map();
+      state.data = AAPR.group(state.rawData, state.grouping);
+      state.data.actorDetails = actorDetails;
+    }
     renderRangeView();
   }
 
@@ -693,7 +719,7 @@
     if (!description) return;
     const grouping = groupingAdjective();
     const labels = {
-      money: `Selected months: ${rangeLabel(state.range)}. Only paying users generate revenue and costs; runs by free users aren't included. Revenue is split by Actor.`,
+      money: `Selected months: ${rangeLabel(state.range)}. Only paying users generate revenue and costs; runs by free users aren't included. Pin a revenue bar to load Actor details.`,
       cost: `${grouping[0].toUpperCase()}${grouping.slice(1)} cost per 1,000 results for ${rangeLabel(state.range)}.`,
       results: `${grouping[0].toUpperCase()}${grouping.slice(1)} results for ${rangeLabel(state.range)}.`,
       runs: `${grouping[0].toUpperCase()}${grouping.slice(1)} runs by status for ${rangeLabel(state.range)}.`,
@@ -748,74 +774,101 @@
   }
 
   function rangeSeries(definition, data) {
-    if (definition.key === "money") {
-      const actorSeries = actorChartSeries(data);
-      if (actorSeries.length) return actorSeries;
-    }
     if (definition.series) return definition.series;
     return [definition];
   }
 
-  function actorTotals(data) {
-    const names = Object.entries(data?.actorNames || {});
-    const totals = new Map(names.map(([actorId]) => [actorId, { revenue: 0, runs: 0 }]));
-    for (const row of Object.values(data.daily || {})) {
-      for (const [actorId, actor] of Object.entries(row.actorStats || {})) {
-        const total = totals.get(actorId);
-        if (!total) continue;
-        total.revenue += Number(actor.revenue) || 0;
-        total.runs += Number(actor.runs) || 0;
+  function catalogActors(data) {
+    const byId = new Map();
+    for (const actor of data?.actorCatalog || []) {
+      if (!actor?.actorId) continue;
+      byId.set(actor.actorId, { ...actor, activeMonths: [...(actor.activeMonths || [])] });
+    }
+    if (!byId.size) {
+      for (const [month, actors] of Object.entries(data?.actorCatalogByMonth || {})) {
+        for (const actor of actors || []) {
+          if (!actor?.actorId) continue;
+          const current = byId.get(actor.actorId) || {
+            actorId: actor.actorId,
+            name: actor.name || actor.actorId,
+            totalRevenueUsd: 0,
+            totalCostUsd: 0,
+            activeMonths: [],
+          };
+          current.totalRevenueUsd += Number(actor.totalRevenueUsd) || 0;
+          current.totalCostUsd += Number(actor.totalCostUsd) || 0;
+          if (!current.activeMonths.includes(month)) current.activeMonths.push(month);
+          current.name = actor.name || current.name;
+          byId.set(actor.actorId, current);
+        }
       }
     }
-    return { names, totals };
+    return [...byId.values()];
   }
 
-  function sortActorRanking(names, totals) {
-    return names
-      .sort((left, right) => {
-        const leftTotal = totals.get(left[0]) || { revenue: 0, runs: 0 };
-        const rightTotal = totals.get(right[0]) || { revenue: 0, runs: 0 };
-        // Keep every revenue-producing Actor ahead of run-only Actors before
-        // comparing the actual revenue totals. This makes the display limit
-        // useful even when many Actors have runs but no monetization.
-        return Number(rightTotal.revenue > 0) - Number(leftTotal.revenue > 0)
-          || rightTotal.revenue - leftTotal.revenue
-          || rightTotal.runs - leftTotal.runs
-          || String(left[1]).localeCompare(String(right[1]));
-      });
+  function sourceMonths(row) {
+    return [...new Set((row?.sourceDays || []).map((day) => `${day.slice(0, 7)}-01`))];
   }
 
-  function actorRanking(data) {
-    const { names, totals } = actorTotals(data);
-    return sortActorRanking(names, totals)
-      .filter(([actorId]) => {
-        const total = totals.get(actorId);
-        return total && (total.revenue > 0 || total.runs > 0);
-      });
+  function tooltipCandidates(data, row) {
+    const months = new Set(sourceMonths(row));
+    return catalogActors(data)
+      .filter((actor) => !months.size || actor.activeMonths?.some((month) => months.has(month)))
+      .sort((left, right) =>
+        Number((right.totalRevenueUsd || 0) > 0) - Number((left.totalRevenueUsd || 0) > 0)
+        || (Number(right.totalRevenueUsd) || 0) - (Number(left.totalRevenueUsd) || 0)
+        || String(left.name || left.actorId).localeCompare(String(right.name || right.actorId)),
+      );
   }
 
   function actorRevenueRanking(data) {
-    const { names, totals } = actorTotals(data);
-    return sortActorRanking(names, totals)
-      .filter(([actorId]) => (totals.get(actorId)?.revenue || 0) > 0);
-  }
-
-  function actorChartSeries(data) {
-    const actors = actorRevenueRanking(data);
-    return actors.map(([actorId, name]) => ({
-      key: actorId,
-      label: name,
-      color: actorColor(actorId, actors),
-      type: "bar",
-      value: (row) => row.actorRevenue?.[actorId] || 0,
-    }));
+    return catalogActors(data)
+      .filter((actor) => Number(actor.totalRevenueUsd) > 0)
+      .sort((left, right) => Number(right.totalRevenueUsd) - Number(left.totalRevenueUsd) || String(left.name).localeCompare(String(right.name)));
   }
 
   function actorColor(actorId, actors) {
-    const index = actors.findIndex(([id]) => id === actorId);
+    const index = actors.findIndex((actor) => (actor.actorId || actor[0]) === actorId);
     return index >= 0 && index < ACTOR_COLOR_PALETTE.length
       ? ACTOR_COLOR_PALETTE[index]
       : MUTED_ACTOR_COLOR;
+  }
+
+  // Range charts also start with account-level aggregates. Once those bars
+  // are visible, fetch only the top colored Actors in the selected months in
+  // the background. This restores accurate stacked colors progressively while
+  // keeping the initial request count proportional to the selected months.
+  function startActorPrefetch(data, rawData, key, loadId) {
+    if (actorPrefetchKey === key) return;
+    actorPrefetchKey = key;
+    const run = ++actorPrefetchRun;
+    const candidates = actorRevenueRanking(data).slice(0, ACTOR_COLOR_PALETTE.length);
+    const months = new Set((rawData?.days || []).map((day) => `${day.slice(0, 7)}-01`));
+    const tasks = candidates.flatMap((candidate) => {
+      const activeMonths = (candidate.activeMonths || []).filter((month) => months.has(month));
+      return (activeMonths.length ? activeMonths : [...months]).map((month) => ({ candidate, month, key: `${month}|${candidate.actorId}` }));
+    });
+    if (!tasks.length) return;
+
+    Promise.allSettled(tasks.map(async (task) => {
+      const cached = actorDetailCache.get(task.key);
+      if (cached?.entry) return { task, entry: cached.entry };
+      const detail = await AAP_API.actorDailyData(task.month, task.candidate.actorId, { priority: "background" });
+      const entry = {
+        actorId: task.candidate.actorId,
+        name: task.candidate.name || task.candidate.actorId,
+        margin: detail.margin,
+        runs: detail.runs,
+      };
+      actorDetailCache.set(task.key, { entry });
+      return { task, entry };
+    })).then((results) => {
+      if (run !== actorPrefetchRun || loadId !== state.loadId || key !== dataKey() || !state.data) return;
+      for (const result of results) {
+        if (result.status === "fulfilled") state.data.actorDetails.set(result.value.task.key, result.value.entry);
+      }
+      if (state.data.actorDetails.size) renderRangeView(true);
+    }).catch(() => {});
   }
 
   function chartValues(series, data) {
@@ -925,35 +978,69 @@
       ctx.fillText(AAPR.formatDate(data.days[index], { month: "short", day: "numeric" }), x, rect.height - bottom + 8);
     }
 
-    for (let seriesIndex = 0; seriesIndex < series.length; seriesIndex++) {
-      const current = series[seriesIndex];
-      const points = values.map((row, index) => ({
-        x: left + index * slot + slot / 2,
-        y: top + plotHeight - (row[seriesIndex] / maxValue) * plotHeight,
-      }));
-      if (current.type === "bar" || definition.type === "bar") {
-        ctx.fillStyle = current.color;
-        for (let index = 0; index < points.length; index++) {
-          const value = values[index][seriesIndex];
-          const below = stackedBars
-            ? values[index].slice(0, seriesIndex).reduce((sum, item) => sum + item, 0)
-            : 0;
-          const height = (value / maxValue) * plotHeight;
-          const y = top + plotHeight - ((below + value) / maxValue) * plotHeight;
-          ctx.fillRect(points[index].x - Math.max(3, slot * 0.62) / 2, y, Math.max(3, slot * 0.62), height);
+    const coloredMoneyBars = definition.key === "money" && data.actorDetails?.size;
+    if (coloredMoneyBars) {
+      const detailEntries = [...data.actorDetails.values()];
+      const revenueRanking = actorRevenueRanking(data);
+      for (let index = 0; index < data.days.length; index++) {
+        const period = data.days[index];
+        const row = data.daily[period] || {};
+        const actorRows = AAPR.actorRowsForDays(detailEntries, row.sourceDays || [period])
+          .filter((actor) => Number(actor.revenue) > 0);
+        const segments = actorRows.map((actor) => ({
+          color: actorColor(actor.actorId, revenueRanking),
+          value: Number(actor.revenue) || 0,
+        }));
+        const accounted = segments.reduce((sum, segment) => sum + segment.value, 0);
+        const total = Number(row.revenue) || 0;
+        if (segments.length && total > accounted) segments.push({ color: MUTED_ACTOR_COLOR, value: total - accounted });
+        if (!segments.length) segments.push({ color: series[0].color, value: total });
+        const drawnTotal = Math.max(total, segments.reduce((sum, segment) => sum + segment.value, 0));
+        const barHeight = (drawnTotal / maxValue) * plotHeight;
+        const x = left + index * slot + slot / 2;
+        const barWidth = Math.max(3, slot * 0.62);
+        let offset = 0;
+        for (const segment of segments) {
+          const height = (segment.value / maxValue) * plotHeight;
+          const y = top + plotHeight - offset - height;
+          ctx.fillStyle = segment.color;
+          ctx.fillRect(x - barWidth / 2, y, barWidth, height);
+          offset += height;
         }
-      } else {
-        ctx.strokeStyle = current.color;
-        ctx.fillStyle = current.color;
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        points.forEach((point, index) => index ? ctx.lineTo(point.x, point.y) : ctx.moveTo(point.x, point.y));
-        ctx.stroke();
-        if (points.length <= 90) {
-          for (const point of points) {
-            ctx.beginPath();
-            ctx.arc(point.x, point.y, 2.5, 0, Math.PI * 2);
-            ctx.fill();
+        // Keep the bar's baseline deterministic for zero-revenue periods.
+        if (!drawnTotal) ctx.fillRect(x - barWidth / 2, top + plotHeight, barWidth, 0);
+      }
+    } else {
+      for (let seriesIndex = 0; seriesIndex < series.length; seriesIndex++) {
+        const current = series[seriesIndex];
+        const points = values.map((row, index) => ({
+          x: left + index * slot + slot / 2,
+          y: top + plotHeight - (row[seriesIndex] / maxValue) * plotHeight,
+        }));
+        if (current.type === "bar" || definition.type === "bar") {
+          ctx.fillStyle = current.color;
+          for (let index = 0; index < points.length; index++) {
+            const value = values[index][seriesIndex];
+            const below = stackedBars
+              ? values[index].slice(0, seriesIndex).reduce((sum, item) => sum + item, 0)
+              : 0;
+            const height = (value / maxValue) * plotHeight;
+            const y = top + plotHeight - ((below + value) / maxValue) * plotHeight;
+            ctx.fillRect(points[index].x - Math.max(3, slot * 0.62) / 2, y, Math.max(3, slot * 0.62), height);
+          }
+        } else {
+          ctx.strokeStyle = current.color;
+          ctx.fillStyle = current.color;
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          points.forEach((point, index) => index ? ctx.lineTo(point.x, point.y) : ctx.moveTo(point.x, point.y));
+          ctx.stroke();
+          if (points.length <= 90) {
+            for (const point of points) {
+              ctx.beginPath();
+              ctx.arc(point.x, point.y, 2.5, 0, Math.PI * 2);
+              ctx.fill();
+            }
           }
         }
       }
@@ -1027,18 +1114,20 @@
 
   function setRangeTooltipTarget(canvas, index) {
     const period = canvas.__aapRange?.data?.days?.[index] || null;
+    const sessionKey = `${dataKey() || ""}|${period || ""}`;
     if (period !== rangeTooltipState.period) {
       rangeTooltipState.sort = "revenue";
       rangeTooltipState.direction = "desc";
       rangeTooltipState.period = period;
     }
+    if (rangeTooltipState.session?.key !== sessionKey) rangeTooltipState.session = null;
     rangeTooltipState.canvas = canvas;
     rangeTooltipState.index = index;
   }
 
   function sortedActorRows(rows, ranking = []) {
     const direction = rangeTooltipState.direction === "asc" ? 1 : -1;
-    const rankingIndex = new Map(ranking.map(([actorId], index) => [actorId, index]));
+    const rankingIndex = new Map(ranking.map((actor, index) => [actor.actorId || actor[0], index]));
     return [...rows].sort((left, right) => {
       let comparison;
       if (rangeTooltipState.sort === "name") {
@@ -1049,6 +1138,96 @@
       if (comparison) return direction * comparison;
       return (rankingIndex.get(left.actorId) ?? ranking.length) - (rankingIndex.get(right.actorId) ?? ranking.length);
     });
+  }
+
+  function tooltipSession(data, row, period) {
+    const key = `${dataKey() || ""}|${period || ""}`;
+    if (!rangeTooltipState.session || rangeTooltipState.session.key !== key) {
+      rangeTooltipState.session = {
+        key,
+        candidates: tooltipCandidates(data, row),
+        details: new Map(),
+        requestedIds: new Set(),
+        failedTasks: [],
+        nextIndex: 0,
+        loading: false,
+        loadId: ++tooltipLoadId,
+      };
+    }
+    return rangeTooltipState.session;
+  }
+
+  function tooltipDetailMonths(candidate, row) {
+    const months = sourceMonths(row);
+    const activeMonths = (candidate.activeMonths || []).filter((month) => !months.length || months.includes(month));
+    return activeMonths.length ? activeMonths : months;
+  }
+
+  async function loadTooltipActors(retry = false) {
+    const canvas = rangeTooltipState.canvas;
+    const index = rangeTooltipState.index;
+    const data = canvas?.__aapRange?.data;
+    const period = data?.days?.[index];
+    const row = period ? data.daily[period] || {} : null;
+    const session = period && row ? tooltipSession(data, row, period) : null;
+    if (!session || session.loading || !rangeTooltipState.pinned) return;
+
+    let tasks;
+    if (retry) {
+      tasks = [...session.failedTasks];
+      session.failedTasks = [];
+    } else {
+      const candidates = session.candidates.slice(session.nextIndex, session.nextIndex + tooltipActorCount);
+      session.nextIndex += candidates.length;
+      for (const candidate of candidates) session.requestedIds.add(candidate.actorId);
+      tasks = candidates.flatMap((candidate) => tooltipDetailMonths(candidate, row).map((month) => ({
+        candidate,
+        month,
+        key: `${month}|${candidate.actorId}`,
+      })));
+    }
+    if (!tasks.length) {
+      renderRangeTooltip(canvas, index);
+      positionRangeTooltip(rangeTooltipState.x, rangeTooltipState.y);
+      return;
+    }
+
+    session.loading = true;
+    renderRangeTooltip(canvas, index);
+    positionRangeTooltip(rangeTooltipState.x, rangeTooltipState.y);
+    const loadId = session.loadId;
+    const results = await Promise.allSettled(tasks.map(async (task) => {
+      const cached = actorDetailCache.get(task.key);
+      if (cached?.entry) return { task, entry: cached.entry };
+      const detail = await AAP_API.actorDailyData(task.month, task.candidate.actorId, { priority: "foreground" });
+      const entry = {
+        actorId: task.candidate.actorId,
+        name: task.candidate.name || task.candidate.actorId,
+        margin: detail.margin,
+        runs: detail.runs,
+      };
+      actorDetailCache.set(task.key, { entry });
+      return { task, entry };
+    }));
+    if (rangeTooltipState.session !== session || session.loadId !== loadId) return;
+    for (const [index, result] of results.entries()) {
+      if (result.status === "fulfilled") {
+        session.details.set(result.value.task.key, result.value.entry);
+      } else {
+        session.failedTasks.push(tasks[index]);
+      }
+    }
+    session.loading = false;
+    renderRangeTooltip(canvas, index);
+    positionRangeTooltip(rangeTooltipState.x, rangeTooltipState.y);
+  }
+
+  function appendTooltipAction(label, action, disabled = false) {
+    const button = createElement("button", "aap-range-tooltip-action", label);
+    button.type = "button";
+    button.dataset.action = action;
+    button.disabled = disabled;
+    return button;
   }
 
   function renderRangeTooltip(canvas, index) {
@@ -1075,60 +1254,80 @@
     rangeTooltip.appendChild(createElement("div", "aap-range-tooltip-period", tooltipPeriodLabel(period)));
 
     if (definition.key === "money") {
-      const eligibleActors = Object.values(row.actorStats || {}).filter((actor) => Number(actor.revenue) > 0 || Number(actor.runs) > 0);
-      if (!eligibleActors.length) {
-        if (state.partial) rangeTooltip.appendChild(createElement("div", "aap-range-tooltip-note", "Some Actor data could not be loaded; retrying."));
-        rangeTooltip.appendChild(createElement("div", "aap-range-tooltip-note", "No revenue or runs this day."));
-        return true;
+      const summary = createElement("div", "aap-range-tooltip-summary");
+      for (const [key, label] of [["revenue", "Overall revenue"], ["profit", "Overall profit"]]) {
+        const item = createElement("div", `aap-range-tooltip-summary-item aap-range-tooltip-summary-${key}`);
+        item.append(
+          createElement("span", "aap-range-tooltip-summary-label", label),
+          createElement("strong", "aap-range-tooltip-summary-value", AAPF.money(row[key] ?? 0)),
+        );
+        summary.appendChild(item);
       }
-      const rankedActors = actorRanking(data);
+      rangeTooltip.appendChild(summary);
+
+      const session = tooltipSession(data, row, period);
+      const detailEntries = [...session.details.values()];
+      const actors = AAPR.actorRowsForDays(detailEntries, row.sourceDays || [period]);
       const revenueRankedActors = actorRevenueRanking(data);
-      const visibleActorIds = new Set(rankedActors.slice(0, tooltipActorCount).map(([actorId]) => actorId));
-      const actors = eligibleActors.filter((actor) => visibleActorIds.has(actor.actorId));
+      const loadedCount = session.requestedIds.size;
+      const candidateCount = session.candidates.length;
 
-      if (state.partial) {
-        rangeTooltip.appendChild(createElement("div", "aap-range-tooltip-note", "Some Actor data could not be loaded; retrying."));
+      if (state.partial) rangeTooltip.appendChild(createElement("div", "aap-range-tooltip-note", "Some account data could not be loaded; retrying."));
+      if (session.failedTasks.length) {
+        rangeTooltip.appendChild(createElement("div", "aap-range-tooltip-note", `${session.failedTasks.length} Actor detail request${session.failedTasks.length === 1 ? "" : "s"} failed.`));
       }
 
-      const hint = createElement(
-        "div",
-        "aap-range-tooltip-subtitle",
-        rangeTooltipState.pinned
-          ? `Showing ${actors.length} of ${eligibleActors.length} eligible Actors`
-          : `Showing ${actors.length} of ${eligibleActors.length} eligible Actors · click bar to sort`,
-      );
-      rangeTooltip.appendChild(hint);
+      const hintText = !rangeTooltipState.pinned
+        ? `Click the bar to load up to ${tooltipActorCount} Actor details`
+        : session.loading
+          ? `Loading Actor details… showing ${actors.length} loaded`
+          : `Showing ${actors.length} loaded Actors · ${loadedCount} of ${candidateCount} candidates`;
+      rangeTooltip.appendChild(createElement("div", "aap-range-tooltip-subtitle", hintText));
 
-      const table = document.createElement("table");
-      table.className = "aap-range-tooltip-table";
-      const head = document.createElement("thead");
-      const headRow = document.createElement("tr");
-      for (const column of ACTOR_TOOLTIP_COLUMNS) {
-        const cell = createElement("th", rangeTooltipState.sort === column.key ? "aap-range-tooltip-sorted" : "", column.label);
-        cell.dataset.sort = column.key;
-        if (rangeTooltipState.sort === column.key) {
-          cell.appendChild(document.createTextNode(rangeTooltipState.direction === "asc" ? " ▲" : " ▼"));
+      if (!rangeTooltipState.pinned) return true;
+
+      if (actors.length) {
+        const table = document.createElement("table");
+        table.className = "aap-range-tooltip-table";
+        const head = document.createElement("thead");
+        const headRow = document.createElement("tr");
+        for (const column of ACTOR_TOOLTIP_COLUMNS) {
+          const cell = createElement("th", rangeTooltipState.sort === column.key ? "aap-range-tooltip-sorted" : "", column.label);
+          cell.dataset.sort = column.key;
+          if (rangeTooltipState.sort === column.key) {
+            cell.appendChild(document.createTextNode(rangeTooltipState.direction === "asc" ? " ▲" : " ▼"));
+          }
+          headRow.appendChild(cell);
         }
-        headRow.appendChild(cell);
-      }
-      head.appendChild(headRow);
-      table.appendChild(head);
+        head.appendChild(headRow);
+        table.appendChild(head);
 
-      const body = document.createElement("tbody");
-      for (const actor of sortedActorRows(actors, rankedActors)) {
-        const rowElement = document.createElement("tr");
-        const nameCell = document.createElement("td");
-        const dot = createElement("span", "aap-range-dot");
-        dot.style.backgroundColor = actorColor(actor.actorId, revenueRankedActors);
-        nameCell.append(dot, document.createTextNode(actor.name || actor.actorId));
-        rowElement.appendChild(nameCell);
-        for (const column of ACTOR_TOOLTIP_COLUMNS.slice(1)) {
-          rowElement.appendChild(createElement("td", "", column.format(actor)));
+        const body = document.createElement("tbody");
+        for (const actor of sortedActorRows(actors, session.candidates)) {
+          const rowElement = document.createElement("tr");
+          const nameCell = document.createElement("td");
+          const dot = createElement("span", "aap-range-dot");
+          dot.style.backgroundColor = actorColor(actor.actorId, revenueRankedActors);
+          nameCell.append(dot, document.createTextNode(actor.name || actor.actorId));
+          rowElement.appendChild(nameCell);
+          for (const column of ACTOR_TOOLTIP_COLUMNS.slice(1)) {
+            rowElement.appendChild(createElement("td", "", column.format(actor)));
+          }
+          body.appendChild(rowElement);
         }
-        body.appendChild(rowElement);
+        table.appendChild(body);
+        rangeTooltip.appendChild(table);
+      } else if (!session.loading) {
+        rangeTooltip.appendChild(createElement("div", "aap-range-tooltip-note", candidateCount ? "No loaded Actor had revenue or runs in this bucket." : "No active Actors were included in the monthly catalog."));
       }
-      table.appendChild(body);
-      rangeTooltip.appendChild(table);
+      if (session.failedTasks.length) {
+        rangeTooltip.appendChild(appendTooltipAction("Retry failed details", "retry", session.loading));
+      }
+      if (session.nextIndex < candidateCount) {
+        rangeTooltip.appendChild(appendTooltipAction("Load more Actors", "more", session.loading));
+      } else if (!session.loading && !session.failedTasks.length && loadedCount) {
+        rangeTooltip.appendChild(createElement("div", "aap-range-tooltip-note", "All catalog Actors loaded for this bucket."));
+      }
       return true;
     }
 
@@ -1197,11 +1396,17 @@
     if (!renderRangeTooltip(target.canvas, target.index)) return hideRangeTooltip();
     rangeTooltip.style.display = "block";
     positionRangeTooltip(event.clientX, event.clientY);
+    loadTooltipActors();
   }
 
   function onRangeTooltipClick(event) {
     event.stopPropagation();
     if (event.target.closest(".aap-range-tooltip-close")) return hideRangeTooltip();
+    const action = event.target.closest("button[data-action]")?.dataset.action;
+    if (action === "more" || action === "retry") {
+      loadTooltipActors(action === "retry");
+      return;
+    }
     const header = event.target.closest("th[data-sort]");
     if (!header || !rangeTooltipState.pinned || !rangeTooltipState.canvas) return;
     const key = header.dataset.sort;
@@ -1227,7 +1432,9 @@
       index: null,
       x: 0,
       y: 0,
+      session: null,
     };
+    tooltipLoadId++;
   }
 
   document.addEventListener("click", (event) => {
@@ -1241,9 +1448,9 @@
 
   async function loadRange() {
     if (!validRange(state.range) || !state.observedMonth) return;
-    if (state.loading) return;
+    if (state.loading || state.refreshing) return;
     await AAP_API.whenReady?.();
-    if (!validRange(state.range) || !state.observedMonth || state.loading) return;
+    if (!validRange(state.range) || !state.observedMonth || state.loading || state.refreshing) return;
     const key = dataKey();
     if (!key) return;
     if (Date.now() < state.retryAt) return;
@@ -1254,11 +1461,14 @@
       memoryCache.set(key, cached);
     }
     if (key === state.loadedKey && fresh) return;
+    const hadData = Boolean(state.data && state.loadedKey === key);
+    const previousActorDetails = hadData ? state.data.actorDetails : null;
     state.loadedKey = key;
-    state.loading = true;
+    state.loading = !hadData;
+    state.refreshing = hadData;
     state.error = null;
     state.partial = null;
-    renderRangeView();
+    if (!hadData) renderRangeView();
     const loadId = ++state.loadId;
     try {
       const dates = apiDates(state.range);
@@ -1273,15 +1483,24 @@
       }
       state.rawData = rawData;
       state.data = AAPR.group(rawData, state.grouping);
+      // A background refresh must not discard tooltip rows that were already
+      // loaded for the same range.
+      state.data.actorDetails = previousActorDetails || new Map();
       state.partial = rawData.partial || null;
       state.retryAt = rawData.partial ? Date.now() + PARTIAL_RETRY_MS : 0;
+      startActorPrefetch(state.data, rawData, key, loadId);
     } catch (error) {
       if (loadId !== state.loadId || key !== dataKey()) return;
-      state.error = error;
-      state.loadedKey = null;
+      // Keep the last successful snapshot usable if a background refresh
+      // fails. The next retry can update it without a blank loading state.
+      state.error = hadData ? null : error;
+      if (!hadData) state.loadedKey = null;
       state.retryAt = Date.now() + 10_000;
     } finally {
-      if (loadId === state.loadId && key === dataKey()) state.loading = false;
+      if (loadId === state.loadId && key === dataKey()) {
+        state.loading = false;
+        state.refreshing = false;
+      }
       renderRangeView(false);
     }
   }
