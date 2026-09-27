@@ -1255,11 +1255,16 @@
 
     if (definition.key === "money") {
       const summary = createElement("div", "aap-range-tooltip-summary");
-      for (const [key, label] of [["revenue", "Overall revenue"], ["profit", "Overall profit"]]) {
+      const summaryFields = [
+        ["revenue", "Overall revenue", (value) => AAPF.money(value ?? 0)],
+        ["profit", "Overall profit", (value) => AAPF.money(value ?? 0)],
+        ["margin", "Overall margin", (value) => value == null ? "–" : AAPF.pct(value)],
+      ];
+      for (const [key, label, format] of summaryFields) {
         const item = createElement("div", `aap-range-tooltip-summary-item aap-range-tooltip-summary-${key}`);
         item.append(
           createElement("span", "aap-range-tooltip-summary-label", label),
-          createElement("strong", "aap-range-tooltip-summary-value", AAPF.money(row[key] ?? 0)),
+          createElement("strong", "aap-range-tooltip-summary-value", format(row[key])),
         );
         summary.appendChild(item);
       }
