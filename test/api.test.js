@@ -15,6 +15,7 @@ class SimpleCustomEvent extends SimpleEvent {
 
 const listeners = new Map();
 const requests = [];
+const publicRequests = [];
 let requestNumber = 0;
 const window = {
   addEventListener(type, listener) {
@@ -36,6 +37,16 @@ const context = {
   crypto: { randomUUID: () => `request-${++requestNumber}` },
   setTimeout,
   clearTimeout,
+  fetch: async (url) => {
+    publicRequests.push(new URL(url));
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return { data: { id: "public-actor", stats: { totalUsers30Days: 3 } } };
+      },
+    };
+  },
   console,
   AAP_CACHE: {
     async getApi() { return { hit: false }; },
@@ -113,6 +124,29 @@ window.dispatchEvent(new SimpleCustomEvent("aap-auth-scope", { detail: "account-
   assert.equal(detailRequests.length, 2, "identical concurrent Actor detail requests should be deduplicated");
   assert.equal(details[0].actorId, "actor-a");
   assert.equal(details[1].margin, details[0].margin);
+
+  const publicDetails = await Promise.all([
+    context.self.AAP_API.publicActorDetails("example-user/example-actor"),
+    context.self.AAP_API.publicActorDetails("example-user/example-actor"),
+  ]);
+  assert.equal(publicRequests.length, 1, "identical public Actor requests should be deduplicated");
+  assert.equal(publicRequests[0].origin, "https://api.apify.com");
+  assert.equal(publicRequests[0].pathname, "/v2/acts/example-user~example-actor");
+  assert.equal(publicDetails[0].data.id, "public-actor");
+
+  const publicStore = await context.self.AAP_API.publicActorStore("example-user", {
+    limit: 1000,
+    offset: 1000,
+    sortBy: "newest",
+    priority: "background",
+  });
+  assert.equal(publicRequests.length, 2);
+  assert.equal(publicRequests[1].pathname, "/v2/store");
+  assert.equal(publicRequests[1].searchParams.get("username"), "example-user");
+  assert.equal(publicRequests[1].searchParams.get("limit"), "1000");
+  assert.equal(publicRequests[1].searchParams.get("offset"), "1000");
+  assert.equal(publicRequests[1].searchParams.get("sortBy"), "newest");
+  assert.equal(publicStore.data.id, "public-actor");
   console.log("API pooling, deduplication, and lazy range request tests passed");
 })().catch((error) => {
   console.error(error);

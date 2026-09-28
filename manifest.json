@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Apify Insights Plus",
   "version": "0.0.1",
-  "description": "Adds ranged analytics, account-wide Actor quality, acquisition, and debugging overviews to the Apify Console Insights pages.",
+  "description": "Adds ranged analytics, account-wide Actor quality, acquisition, debugging, and public Actor activity insights to Apify.",
   "permissions": [
     "storage"
   ],
@@ -33,12 +33,16 @@
     },
     {
       "matches": [
-        "https://console.apify.com/*"
+        "https://console.apify.com/*",
+        "https://apify.com/*",
+        "https://www.apify.com/*"
       ],
       "js": [
         "lib/context.js",
         "lib/format.js",
         "lib/range.js",
+        "lib/actor-detail.js",
+        "lib/profile-sort.js",
         "lib/api.js",
         "lib/cache.js",
         "lib/insights-nav.js",
@@ -46,7 +50,9 @@
         "content/range.js",
         "content/quality.js",
         "content/acquisition.js",
-        "content/debugging.js"
+        "content/debugging.js",
+        "content/actor-detail.js",
+        "content/profile-sort.js"
       ],
       "css": [
         "content/app.css"
