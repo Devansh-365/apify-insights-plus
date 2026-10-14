@@ -67,6 +67,12 @@ assert.deepEqual(Array.from(helpers.sortActors(actors, "runs"), (actor) => actor
   "actor-c",
   "actor-d",
 ]);
+assert.deepEqual(Array.from(helpers.sortActors(actors, "monthlyRuns"), (actor) => actor.name), [
+  "actor-b",
+  "actor-a",
+  "actor-c",
+  "actor-d",
+]);
 assert.deepEqual(Array.from(helpers.sortActors(actors, "users", "asc"), (actor) => actor.name), [
   "actor-c",
   "actor-a",
@@ -97,5 +103,12 @@ assert.deepEqual(Array.from(helpers.sortActors(actors, "newest", "asc"), (actor)
   "actor-b",
   "actor-a",
 ]);
+
+assert.deepEqual(Array.from(helpers.filterActors(actors, "mau", "gte", 2), (actor) => actor.name), ["actor-a"]);
+assert.deepEqual(Array.from(helpers.filterActors(actors, "runs", "gt", 12), (actor) => actor.name), ["actor-b"]);
+assert.deepEqual(Array.from(helpers.filterActors(actors, "monthlyRuns", "lte", 7), (actor) => actor.name), ["actor-a"]);
+assert.deepEqual(Array.from(helpers.filterActors(actors, "users", "eq", 0), (actor) => actor.name), ["actor-c"]);
+assert.deepEqual(Array.from(helpers.filterActors(actors, "bookmarks", "lt", 5), (actor) => actor.name), ["actor-a", "actor-c"]);
+assert.deepEqual(Array.from(helpers.filterActors(actors, "runs", "gte", "not-a-number")), []);
 
 console.log("Profile Actor sorting tests passed");

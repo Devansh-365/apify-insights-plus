@@ -80,9 +80,19 @@
     });
   }
 
+  function renderHeading(subtitle) {
+    const heading = createElement("div", "aap-actor-detail-heading");
+    heading.append(
+      createElement("span", "aap-actor-detail-kicker", "Public activity"),
+      createElement("h2", null, "Actor insights"),
+      createElement("p", null, subtitle),
+    );
+    return heading;
+  }
+
   function renderLoading() {
     host.replaceChildren(
-      createElement("div", "aap-actor-detail-heading", "Actor insights"),
+      renderHeading("Loading the latest public activity snapshot…"),
       createElement("div", "aap-actor-detail-loading", "Loading public Actor statistics…"),
     );
     host.setAttribute("aria-busy", "true");
@@ -90,7 +100,7 @@
 
   function renderError() {
     host.replaceChildren(
-      createElement("div", "aap-actor-detail-heading", "Actor insights"),
+      renderHeading("Public activity snapshot"),
       createElement("div", "aap-actor-detail-error", state.error || "Actor statistics could not be loaded."),
     );
     host.removeAttribute("aria-busy");
@@ -98,20 +108,59 @@
 
   function renderSummary(data) {
     const summary = createElement("div", "aap-actor-detail-summary");
-    for (const [label, value, title] of [
-      ["Active Users last 30 days", formatInteger(data.activeUsers30Days)],
-      ["Runs last 30 days", formatInteger(data.runs30Days)],
-      ["Created At", formatDate(data.createdAt), data.createdAt],
-      ["Pricing Updated", formatDate(data.pricingUpdatedAt), data.pricingUpdatedAt],
-      ["Last Run", formatDate(data.lastRunAt), data.lastRunAt],
+    for (const metric of [
+      {
+        label: "Active users",
+        context: "Last 30 days",
+        value: formatInteger(data.activeUsers30Days),
+        tone: "activity",
+      },
+      {
+        label: "Runs",
+        context: "Last 30 days",
+        value: formatInteger(data.runs30Days),
+        tone: "activity",
+      },
+      {
+        label: "Total runs",
+        context: "Lifetime",
+        value: formatInteger(data.totalRuns),
+        tone: "lifetime",
+      },
+      {
+        label: "Created",
+        context: "Actor profile",
+        value: formatDate(data.createdAt),
+        title: data.createdAt,
+        tone: "metadata",
+      },
+      {
+        label: "Pricing updated",
+        context: "Latest change",
+        value: formatDate(data.pricingUpdatedAt),
+        title: data.pricingUpdatedAt,
+        tone: "metadata",
+      },
+      {
+        label: "Last run",
+        context: "Most recent",
+        value: formatDate(data.lastRunAt),
+        title: data.lastRunAt,
+        tone: "metadata",
+      },
     ]) {
-      const card = createElement("div", "aap-actor-detail-stat");
-      const valueElement = createElement("strong", "aap-actor-detail-stat-value", value);
-      if (title) valueElement.title = title;
-      card.append(
-        createElement("span", "aap-actor-detail-stat-label", label),
-        valueElement,
+      const card = createElement("div", `aap-actor-detail-stat aap-actor-detail-stat-${metric.tone}`);
+      card.dataset.metric = metric.label.toLowerCase().replace(/\s+/g, "-");
+      card.setAttribute("aria-label", `${metric.label}, ${metric.context}: ${metric.value}`);
+      const valueElement = createElement("strong", "aap-actor-detail-stat-value", metric.value);
+      if (metric.title) valueElement.title = metric.title;
+      const head = createElement("div", "aap-actor-detail-stat-head");
+      card.appendChild(head);
+      head.append(
+        createElement("span", "aap-actor-detail-stat-label", metric.label),
+        createElement("span", "aap-actor-detail-stat-context", metric.context),
       );
+      card.appendChild(valueElement);
       summary.appendChild(card);
     }
     return summary;
@@ -248,11 +297,7 @@
       return;
     }
 
-    const heading = createElement("div", "aap-actor-detail-heading");
-    heading.append(
-      createElement("div", null, "Actor insights"),
-      createElement("p", null, "Public activity snapshot from the last 30 days"),
-    );
+    const heading = renderHeading("Public activity snapshot from the last 30 days");
     host.replaceChildren(heading, renderSummary(state.data), renderRunChart(state.data));
     host.removeAttribute("aria-busy");
   }

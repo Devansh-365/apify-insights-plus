@@ -66,6 +66,13 @@
     username: null,
     sortKey: "default",
     direction: "desc",
+    filterSelect: null,
+    filterOperatorSelect: null,
+    filterInput: null,
+    applyFilterButton: null,
+    clearFilterButton: null,
+    filter: null,
+    filterError: null,
     heading: null,
     list: null,
     host: null,
@@ -264,6 +271,22 @@
     return AAP_PROFILE_SORT.metricValue(actor, key);
   }
 
+  function filteredActors() {
+    if (!state.catalog) return [];
+    if (!state.filter) return [...state.catalog];
+    return AAP_PROFILE_SORT.filterActors(
+      state.catalog,
+      state.filter.key,
+      state.filter.operator,
+      state.filter.threshold,
+    );
+  }
+
+  function filterDescription(filter) {
+    if (!filter) return "";
+    return `${AAP_PROFILE_SORT.filterOptionLabel(filter.key)} ${AAP_PROFILE_SORT.filterOperatorLabel(filter.operator)} ${formatCompact(filter.threshold)}`;
+  }
+
   function metricChip(label, value) {
     const chip = createElement("span", "aap-profile-sort-card-chip");
     chip.append(createElement("span", "aap-profile-sort-card-chip-label", label));
@@ -326,6 +349,7 @@
     const totals = createElement("span", "aap-profile-sort-card-totals");
     totals.append(
       metricChip("Runs", formatCompact(actor.runs)),
+      metricChip("30d runs", formatCompact(actor.monthlyRuns)),
       metricChip("Users", formatCompact(actor.users)),
       metricChip("Bookmarks", formatCompact(actor.bookmarks)),
     );
@@ -358,18 +382,51 @@
       state.directionButton.disabled = state.sortKey === "default";
     }
     if (state.retryButton) state.retryButton.hidden = !state.error;
+    if (state.clearFilterButton) state.clearFilterButton.hidden = !state.filter;
+    if (state.applyFilterButton) state.applyFilterButton.disabled = state.loading;
     if (state.loading) {
       setStatus("Loading Actor metrics…");
+    } else if (state.filterError) {
+      setStatus(state.filterError, true);
     } else if (state.error) {
       setStatus(state.error, true);
+    } else if (state.catalog && state.filter) {
+      const visibleCount = filteredActors().length;
+      setStatus(`${filterDescription(state.filter)} · ${visibleCount.toLocaleString()} of ${state.catalog.length.toLocaleString()} Actors`);
     } else if (state.sortKey === "default") {
-      setStatus("Choose Runs, MAUs, Users, or Bookmarks to sort the cards.");
+      setStatus("Choose a sort or filter the cards by a metric threshold.");
     } else if (state.catalog) {
       const label = AAP_PROFILE_SORT.optionLabel(state.sortKey);
       const missing = state.catalog.filter((actor) => metricValue(actor, state.sortKey) == null).length;
       const suffix = missing ? ` · ${missing} without data at the bottom` : "";
       setStatus(`${label} · ${state.catalog.length.toLocaleString()} Actors${suffix}`);
     }
+  }
+
+  function applyFilter() {
+    const key = state.filterSelect?.value;
+    const operator = state.filterOperatorSelect?.value;
+    const rawValue = String(state.filterInput?.value || "").trim();
+    const threshold = Number(rawValue);
+    if (!rawValue || !Number.isFinite(threshold) || threshold < 0) {
+      state.filterError = "Enter a non-negative number to apply this filter.";
+      updateControls();
+      state.filterInput?.focus();
+      return;
+    }
+    state.filter = { key, operator, threshold };
+    state.filterError = null;
+    state.error = null;
+    requestView();
+  }
+
+  function clearFilter() {
+    state.filter = null;
+    state.filterError = null;
+    if (state.filterInput) state.filterInput.value = "";
+    if (state.sortKey === "default") restoreOriginal();
+    else renderSortedList();
+    updateControls();
   }
 
   function createControls() {
@@ -387,10 +444,10 @@
     select.addEventListener("change", () => {
       state.sortKey = select.value;
       state.error = null;
-      if (state.sortKey === "default") {
+      if (state.sortKey === "default" && !state.filter) {
         restoreOriginal();
       } else {
-        requestSort();
+        requestView();
       }
     });
 
@@ -409,15 +466,71 @@
       state.error = null;
       state.catalog = null;
       state.catalogSortKey = null;
-      requestSort(true);
+      requestView(true);
     });
 
+    const filterLabel = createElement("label", "aap-profile-filter-label", "Filter by");
+    const filterSelect = createElement("select", "aap-profile-filter-select");
+    filterSelect.id = `aap-profile-filter-${Date.now()}`;
+    filterLabel.htmlFor = filterSelect.id;
+    for (const option of AAP_PROFILE_SORT.FILTER_OPTIONS) {
+      filterSelect.appendChild(new Option(option.label, option.key));
+    }
+
+    const filterOperatorSelect = createElement("select", "aap-profile-filter-operator");
+    filterOperatorSelect.id = `${filterSelect.id}-operator`;
+    filterOperatorSelect.setAttribute("aria-label", "Filter comparison");
+    for (const operator of AAP_PROFILE_SORT.FILTER_OPERATORS) {
+      filterOperatorSelect.appendChild(new Option(operator.label, operator.key));
+    }
+
+    const filterInput = createElement("input", "aap-profile-filter-input");
+    filterInput.type = "number";
+    filterInput.min = "0";
+    filterInput.step = "1";
+    filterInput.placeholder = "Value";
+    filterInput.setAttribute("aria-label", "Filter threshold");
+    if (state.filter) {
+      filterSelect.value = state.filter.key;
+      filterOperatorSelect.value = state.filter.operator;
+      filterInput.value = String(state.filter.threshold);
+    }
+    filterInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") applyFilter();
+    });
+
+    const applyFilterButton = createElement("button", "aap-profile-filter-apply", "Apply filter");
+    applyFilterButton.type = "button";
+    applyFilterButton.addEventListener("click", applyFilter);
+
+    const clearFilterButton = createElement("button", "aap-profile-filter-clear", "Clear filter");
+    clearFilterButton.type = "button";
+    clearFilterButton.hidden = true;
+    clearFilterButton.addEventListener("click", clearFilter);
+
     const status = createElement("span", "aap-profile-sort-status");
-    host.append(label, select, directionButton, retryButton, status);
+    host.append(
+      label,
+      select,
+      directionButton,
+      filterLabel,
+      filterSelect,
+      filterOperatorSelect,
+      filterInput,
+      applyFilterButton,
+      clearFilterButton,
+      retryButton,
+      status,
+    );
     state.host = host;
     state.select = select;
     state.directionButton = directionButton;
     state.retryButton = retryButton;
+    state.filterSelect = filterSelect;
+    state.filterOperatorSelect = filterOperatorSelect;
+    state.filterInput = filterInput;
+    state.applyFilterButton = applyFilterButton;
+    state.clearFilterButton = clearFilterButton;
     state.status = status;
     updateControls();
     return host;
@@ -449,19 +562,24 @@
   }
 
   function renderSortedList() {
-    if (!state.list?.isConnected || !state.catalog || state.sortKey === "default") return;
+    if (!state.list?.isConnected || !state.catalog || (state.sortKey === "default" && !state.filter)) return;
     state.renderToken++;
     const token = state.renderToken;
     if (state.sortedList) state.sortedList.remove();
     const root = createElement("div", SORTED_LIST_CLASS);
     root.dataset.sortKey = state.sortKey;
     root.dataset.direction = state.direction;
+    if (state.filter) root.dataset.filter = filterDescription(state.filter);
     state.sortedList = root;
     state.list.hidden = true;
     state.list.parentNode.insertBefore(root, state.list);
-    const items = AAP_PROFILE_SORT.sortActors(state.catalog, state.sortKey, state.direction);
+    const items = AAP_PROFILE_SORT.sortActors(filteredActors(), state.sortKey, state.direction);
     if (!items.length) {
-      root.appendChild(createElement("p", "aap-profile-sort-empty", "No public Actors were returned for this profile."));
+      root.appendChild(createElement(
+        "p",
+        "aap-profile-sort-empty",
+        state.filter ? "No public Actors match this filter." : "No public Actors were returned for this profile.",
+      ));
       updateControls();
       return;
     }
@@ -528,7 +646,7 @@
       if (requestId !== state.requestId || state.routeKey !== route.key) return;
       state.catalog = actors;
       state.catalogSortKey = catalogSortKey;
-      if (state.sortKey !== "default") renderSortedList();
+      if (state.sortKey !== "default" || state.filter) renderSortedList();
     } catch (error) {
       if (requestId !== state.requestId || state.routeKey !== route.key) return;
       state.error = error?.message || "Actor metrics could not be loaded.";
@@ -542,9 +660,9 @@
     }
   }
 
-  function requestSort(force = false) {
+  function requestView(force = false) {
     const route = profileRoute();
-    if (!route || state.sortKey === "default") return;
+    if (!route || (state.sortKey === "default" && !state.filter)) return;
     const needsNewestCatalog = state.sortKey === "newest" && state.catalogSortKey !== "newest";
     if (state.catalog && !force && !needsNewestCatalog) {
       renderSortedList();
@@ -565,6 +683,13 @@
       state.username = route.username;
       state.sortKey = "default";
       state.direction = "desc";
+      state.filterSelect = null;
+      state.filterOperatorSelect = null;
+      state.filterInput = null;
+      state.applyFilterButton = null;
+      state.clearFilterButton = null;
+      state.filter = null;
+      state.filterError = null;
       state.heading = null;
       state.list = null;
       state.host = null;
@@ -591,7 +716,7 @@
       const host = createControls();
       surface.heading.insertAdjacentElement("afterend", host);
     }
-    if (state.sortKey !== "default" && state.catalog && (!state.sortedList || !state.sortedList.isConnected)) {
+    if ((state.sortKey !== "default" || state.filter) && state.catalog && (!state.sortedList || !state.sortedList.isConnected)) {
       renderSortedList();
     }
     updateControls();
@@ -605,6 +730,13 @@
     state.host?.remove();
     state.routeKey = null;
     state.username = null;
+    state.filterSelect = null;
+    state.filterOperatorSelect = null;
+    state.filterInput = null;
+    state.applyFilterButton = null;
+    state.clearFilterButton = null;
+    state.filter = null;
+    state.filterError = null;
     state.heading = null;
     state.list = null;
     state.host = null;

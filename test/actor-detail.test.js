@@ -17,6 +17,7 @@ const normalized = context.self.AAP_ACTOR_DETAIL.normalize({
       { createdAt: "2026-03-01T00:00:00.000Z" },
     ],
     stats: {
+      totalRuns: 1248,
       totalUsers30Days: 12,
       publicActorRunStats30Days: {
         SUCCEEDED: 18,
@@ -37,6 +38,7 @@ const normalized = context.self.AAP_ACTOR_DETAIL.normalize({
 assert.equal(normalized.title, "Example Actor");
 assert.equal(normalized.activeUsers30Days, 12);
 assert.equal(normalized.runs30Days, 22);
+assert.equal(normalized.totalRuns, 1248);
 assert.equal(normalized.pricingUpdatedAt, "2026-03-01T00:00:00.000Z");
 assert.equal(normalized.lastRunAt, "2026-03-10T12:00:00.000Z");
 assert.equal(normalized.runStats.SUCCEEDED, 18);
