@@ -40,11 +40,18 @@ const tied = benchmark.rankBuilders([
 assert.deepEqual(tied.rows.map((row) => row.rank), [1, 1, 3], "ties use competition ranking");
 
 const missing = benchmark.rankBuilders([
-  { key: "complete", actorCount: 1, metrics: { monthlyRuns: 10 }, missing: {} },
-  { key: "partial", actorCount: 2, metrics: { monthlyRuns: 10 }, missing: { monthlyRuns: 1 } },
-], "monthlyRuns");
-assert.equal(missing.cohortSize, 1, "partial metric data is excluded from the cohort");
+  { key: "complete", actorCount: 1, metrics: { totalUsers: 10 }, missing: {} },
+  { key: "partial", actorCount: 2, metrics: { totalUsers: 10 }, missing: { totalUsers: 1 } },
+], "totalUsers");
+assert.equal(missing.cohortSize, 1, "unknown total-user data is excluded from the cohort");
 assert.equal(missing.rows[0].builder.key, "complete");
+
+const zeroMonthlyRuns = benchmark.rankBuilders([
+  { key: "active", actorCount: 1, metrics: { monthlyRuns: 10 }, missing: {} },
+  { key: "quiet", actorCount: 2, metrics: { monthlyRuns: 0 }, missing: { monthlyRuns: 1 } },
+], "monthlyRuns");
+assert.equal(zeroMonthlyRuns.cohortSize, 2, "missing 30-day run stats represent a known zero");
+assert.equal(zeroMonthlyRuns.rows[1].value, 0);
 
 const snapshot = benchmark.buildSnapshot({
   builders: aggregate.builders,
@@ -86,6 +93,7 @@ assert.equal(benchmark.validateSnapshot({ ...snapshot, schemaVersion: 999 }), fa
 assert.equal(benchmark.validateSnapshot({ ...snapshot, schemaVersion: 2 }), false, "previous benchmark caches are invalidated");
 assert.equal(benchmark.validateSnapshot({ ...snapshot, schemaVersion: 3 }), false, "local benchmark caches are invalidated after the rank-source change");
 assert.equal(benchmark.validateSnapshot({ ...snapshot, schemaVersion: 4 }), false, "multi-sort benchmark caches are invalidated after the cohort-source change");
+assert.equal(benchmark.validateSnapshot({ ...snapshot, schemaVersion: 5 }), false, "partial Store benchmark caches are invalidated after the profile-source change");
 assert.equal(benchmark.validateSnapshot({ ...snapshot, schemaVersion: 1 }), false, "old benchmark caches are invalidated");
 
 const observedSnapshot = benchmark.buildSnapshot({
@@ -132,6 +140,17 @@ const sharedTag = benchmark.buildTagModel({
   metricKey: "monthlyRuns",
 });
 assert.match(sharedTag.ariaLabel, /shared rank 1 of 2 shared public Store cohort/);
+
+const profileCohortSnapshot = benchmark.buildSnapshot({
+  builders: snapshot.builders,
+  scan: { ...snapshot.scan, distribution: "shared", sourceScope: "apify-public-profile-sitemap" },
+});
+const profileCohortTag = benchmark.buildTagModel({
+  snapshot: profileCohortSnapshot,
+  result: benchmark.rankForBuilder(profileCohortSnapshot.builders, "builder-a", "monthlyRuns"),
+  metricKey: "monthlyRuns",
+});
+assert.match(profileCohortTag.ariaLabel, /shared rank 1 of 2 shared public profile cohort/);
 
 const replacedBuilders = benchmark.mergeBuilder(snapshot.builders, {
   key: "builder-a",
