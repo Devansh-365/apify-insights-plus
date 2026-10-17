@@ -16,6 +16,9 @@ class SimpleCustomEvent extends SimpleEvent {
 const listeners = new Map();
 const requests = [];
 const publicRequests = [];
+const publicFetchOptions = [];
+let cacheReads = 0;
+let cacheWrites = 0;
 let requestNumber = 0;
 const window = {
   addEventListener(type, listener) {
@@ -37,8 +40,9 @@ const context = {
   crypto: { randomUUID: () => `request-${++requestNumber}` },
   setTimeout,
   clearTimeout,
-  fetch: async (url) => {
+  fetch: async (url, options) => {
     publicRequests.push(new URL(url));
+    publicFetchOptions.push(options);
     return {
       ok: true,
       status: 200,
@@ -49,8 +53,8 @@ const context = {
   },
   console,
   AAP_CACHE: {
-    async getApi() { return { hit: false }; },
-    async setApi() {},
+    async getApi() { cacheReads++; return { hit: false }; },
+    async setApi() { cacheWrites++; },
   },
   AAPR: {
     isMonth: () => false,
@@ -147,6 +151,20 @@ window.dispatchEvent(new SimpleCustomEvent("aap-auth-scope", { detail: "account-
   assert.equal(publicRequests[1].searchParams.get("offset"), "1000");
   assert.equal(publicRequests[1].searchParams.get("sortBy"), "newest");
   assert.equal(publicStore.data.id, "public-actor");
+
+  const readsBeforeNoStore = cacheReads;
+  const writesBeforeNoStore = cacheWrites;
+  const noStoreResults = await Promise.all([
+    context.self.AAP_API.publicStorePage({ limit: 1000, offset: 2000, cacheMode: "no-store", priority: "background" }),
+    context.self.AAP_API.publicStorePage({ limit: 1000, offset: 2000, cacheMode: "no-store", priority: "background" }),
+  ]);
+  assert.equal(publicRequests.length, 3, "identical no-store benchmark pages should share one request");
+  assert.equal(publicRequests[2].searchParams.has("username"), false);
+  assert.equal(publicFetchOptions[2].cache, "no-store");
+  assert.equal(cacheReads, readsBeforeNoStore, "no-store benchmark pages must bypass raw cache reads");
+  assert.equal(cacheWrites, writesBeforeNoStore, "no-store benchmark pages must bypass raw cache writes");
+  assert.equal(noStoreResults[0].data.id, noStoreResults[1].data.id);
+  assert.throws(() => context.self.AAP_API.publicStorePage({ offset: -1 }), /Invalid public Store page offset/);
   console.log("API pooling, deduplication, and lazy range request tests passed");
 })().catch((error) => {
   console.error(error);

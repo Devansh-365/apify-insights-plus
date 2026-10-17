@@ -6,6 +6,10 @@ const context = { self: {} };
 vm.runInNewContext(fs.readFileSync("lib/profile-sort.js", "utf8"), context);
 const helpers = context.self.AAP_PROFILE_SORT;
 
+assert.equal(helpers.profileRoute("/builder-name").key, "builder-name");
+assert.equal(helpers.profileRoute("/builder-name").username, "builder-name");
+assert.equal(helpers.profileRoute("/store"), null);
+
 const response = {
   data: {
     total: 4,
@@ -21,6 +25,7 @@ const response = {
           totalUsers30Days: 3,
           totalUsers: 8,
           bookmarkCount: 2,
+          actorReviewCount: 2,
         },
       },
       {
@@ -35,13 +40,14 @@ const response = {
           totalUsers: 20,
           bookmarkCount: 5,
         },
+        actorReviewCount: 5,
       },
       {
         id: "actor-c",
         name: "actor-c",
         title: "Actor C",
         username: "builder",
-        stats: { totalRuns: 0, totalUsers30Days: 0, totalUsers: 0, bookmarkCount: 0 },
+        stats: { totalRuns: 0, totalUsers30Days: 0, totalUsers: 0, bookmarkCount: 0, actorReviewCount: 0 },
       },
       { id: "actor-d", name: "actor-d", title: "Actor D", username: "builder", stats: {} },
     ],
@@ -54,12 +60,16 @@ assert.equal(helpers.actorKey(actors[0]), "builder/actor-a");
 assert.equal(actors[0].mau, 3);
 assert.equal(actors[0].monthlyRuns, 7);
 assert.equal(actors[1].bookmarks, 5);
+assert.equal(actors[0].actorReviewCount, 2);
+assert.equal(actors[1].actorReviewCount, 5);
 assert.equal(actors[2].runs, 0, "zero is a known metric value");
 assert.equal(actors[2].monthlyRuns, null, "missing monthly run metrics remain missing");
 assert.equal(actors[3].users, null, "missing metrics remain missing");
 const aggregate = helpers.aggregateActorStats(actors);
 assert.equal(aggregate.totalRuns, 52);
 assert.equal(aggregate.monthlyRuns, 18);
+assert.equal(aggregate.totalReviews, 7);
+assert.equal(aggregate.totalBookmarks, 7);
 
 assert.deepEqual(Array.from(helpers.sortActors(actors, "runs"), (actor) => actor.name), [
   "actor-b",

@@ -6,59 +6,6 @@
   const PAGE_CLASS = "aap-profile-sort-page";
   const PAGE_SIZE = 1000;
   const CATALOG_TTL_MS = 15 * 60 * 1000;
-  const ROUTE_EXCLUSIONS = new Set([
-    "about",
-    "account",
-    "actors",
-    "admin",
-    "api",
-    "api-reference",
-    "assets",
-    "contact",
-    "crawlers",
-    "dashboard",
-    "developers",
-    "docs",
-    "documentation",
-    "downloads",
-    "ext",
-    "help",
-    "hiring",
-    "image",
-    "images",
-    "integrations",
-    "job",
-    "jobs",
-    "library",
-    "live-status",
-    "login",
-    "logout",
-    "market",
-    "marketplace",
-    "password",
-    "pricing",
-    "privacy",
-    "products",
-    "profiles",
-    "release-notes",
-    "request-form",
-    "request-solution",
-    "reset-password",
-    "schemas",
-    "settings",
-    "sign-in",
-    "sign-up",
-    "signin",
-    "signup",
-    "solutions",
-    "store",
-    "support",
-    "team",
-    "terms",
-    "user",
-    "users",
-  ]);
-
   const catalogCache = new Map();
   const catalogFetches = new Map();
   const state = {
@@ -107,16 +54,7 @@
   }
 
   function profileRoute() {
-    const parts = location.pathname.split("/").filter(Boolean);
-    if (parts.length !== 1 || ROUTE_EXCLUSIONS.has(parts[0].toLowerCase())) return null;
-    let username;
-    try {
-      username = decodeURIComponent(parts[0]);
-    } catch {
-      return null;
-    }
-    if (!/^[^/?#\s]+$/.test(username)) return null;
-    return { key: username.toLowerCase(), username };
+    return AAP_PROFILE_SORT.profileRoute(location.pathname);
   }
 
   function headingText(element) {
@@ -147,25 +85,59 @@
     if (!state.profileStatsHost?.isConnected) return;
     const loading = state.profileStatsLoading;
     const error = state.profileStatsError;
-    const metrics = [
+    const runMetrics = [
       ["Total runs", state.profileStats?.totalRuns, "↗"],
       ["Monthly runs", state.profileStats?.monthlyRuns, "↻"],
     ];
-    state.profileStatsHost.replaceChildren(...metrics.map(([label, value, icon]) => {
-      const row = createElement("div", "aap-profile-run-metric");
+    const communityMetrics = [
+      ["Reviews", state.profileStats?.totalReviews, "☆"],
+      ["Bookmarks", state.profileStats?.totalBookmarks, "▱"],
+    ];
+    const createHeading = (text, className) => {
+      const heading = createElement("div", className, text);
+      heading.setAttribute("role", "heading");
+      heading.setAttribute("aria-level", "4");
+      return heading;
+    };
+    const createRows = (metrics, className) => metrics.map(([label, value, icon]) => {
+      const row = createElement("div", `aap-profile-run-metric ${className}`.trim());
       const iconElement = createElement("span", "aap-profile-run-metric-icon", icon);
       iconElement.setAttribute("aria-hidden", "true");
       const displayValue = loading ? "Loading…" : error ? "Unavailable" : formatCompact(value);
       const text = createElement("span", "aap-profile-run-metric-text");
       text.append(
         createElement("strong", "aap-profile-run-metric-value", displayValue),
-        document.createTextNode(` ${label}`),
+        createElement("span", "aap-profile-run-metric-label", label),
       );
       row.append(iconElement, text);
       if (error) row.title = error;
       return row;
-    }));
-    state.profileStatsHost.setAttribute("aria-live", "polite");
+    });
+    const benchmarkSlot = state.profileStatsHost.querySelector("[data-aap-profile-benchmark-tag]") || createElement("span", "aap-profile-benchmark-slot");
+    benchmarkSlot.setAttribute("data-aap-profile-benchmark-tag", "true");
+    let benchmarkRegion = state.profileStatsHost.querySelector("[data-aap-profile-benchmark-details]");
+    if (!benchmarkRegion) {
+      benchmarkRegion = createElement("div", "aap-profile-benchmark-region");
+      benchmarkRegion.hidden = true;
+    }
+    benchmarkRegion.setAttribute("data-aap-profile-benchmark-details", "true");
+    benchmarkRegion.id = "aap-profile-benchmark-details";
+    benchmarkRegion.setAttribute("role", "region");
+    benchmarkRegion.setAttribute("aria-label", "Builder benchmark details");
+    const headingRow = createElement("div", "aap-profile-run-metric-heading-row");
+    headingRow.append(
+      createHeading("Run activity", "aap-profile-run-metric-heading"),
+      benchmarkSlot,
+    );
+    state.profileStatsHost.replaceChildren(
+      headingRow,
+      benchmarkRegion,
+      ...createRows(runMetrics, ""),
+      createHeading("Community", "aap-profile-community-heading"),
+      ...createRows(communityMetrics, "aap-profile-community-metric"),
+    );
+    state.profileStatsHost.setAttribute("aria-label", "Run activity and community metrics");
+    state.profileStatsHost.setAttribute("aria-live", "off");
   }
 
   function resetProfileStats() {
@@ -289,8 +261,10 @@
 
   function metricChip(label, value) {
     const chip = createElement("span", "aap-profile-sort-card-chip");
+    const valueElement = createElement("span", "aap-profile-sort-card-chip-value", value);
+    valueElement.title = String(value);
     chip.append(createElement("span", "aap-profile-sort-card-chip-label", label));
-    chip.append(createElement("span", "aap-profile-sort-card-chip-value", value));
+    chip.append(valueElement);
     return chip;
   }
 
@@ -313,16 +287,21 @@
       header.appendChild(picture);
     }
     const titleWrap = createElement("div", "aap-profile-sort-card-title-wrap");
-    titleWrap.append(
-      createElement("h3", "aap-profile-sort-card-title", actor.title),
-      createElement("code", "aap-profile-sort-card-slug", `${actor.username}/${actor.name}`),
-    );
+    const title = createElement("h3", "aap-profile-sort-card-title", actor.title);
+    title.title = actor.title;
+    const slugValue = `${actor.username}/${actor.name}`;
+    const slug = createElement("code", "aap-profile-sort-card-slug", slugValue);
+    slug.title = slugValue;
+    titleWrap.append(title, slug);
     header.appendChild(titleWrap);
     if (actor.notice && actor.notice !== "NONE") {
       header.appendChild(createElement("span", "aap-profile-sort-card-notice", actor.notice));
     }
     main.appendChild(header);
-    main.appendChild(createElement("p", "aap-profile-sort-card-description", actor.description || "No description"));
+    const descriptionValue = actor.description || "No description";
+    const description = createElement("p", "aap-profile-sort-card-description", descriptionValue);
+    description.title = descriptionValue;
+    main.appendChild(description);
 
     const summary = createElement("div", "aap-profile-sort-card-summary");
     summary.append(
@@ -367,6 +346,13 @@
   function updateControls() {
     if (!state.host) return;
     state.host.setAttribute("aria-busy", state.loading ? "true" : "false");
+    state.host.dataset.filterActive = state.filter ? "true" : "false";
+    state.host.dataset.state = state.loading
+      ? "loading"
+      : (state.error || state.filterError ? "error" : "ready");
+    if (state.filterInput) {
+      state.filterInput.setAttribute("aria-invalid", state.filterError ? "true" : "false");
+    }
     if (state.select) state.select.value = state.sortKey;
     if (state.directionButton) {
       const isNewest = state.sortKey === "newest";
@@ -432,7 +418,7 @@
   function createControls() {
     const host = createElement("div", HOST_CLASS);
     host.setAttribute("role", "region");
-    host.setAttribute("aria-label", "Sort public Actors");
+    host.setAttribute("aria-label", "Sort and filter public Actors");
 
     const label = createElement("label", "aap-profile-sort-label", "Sort Actors by");
     const select = createElement("select", "aap-profile-sort-select");
@@ -479,17 +465,24 @@
 
     const filterOperatorSelect = createElement("select", "aap-profile-filter-operator");
     filterOperatorSelect.id = `${filterSelect.id}-operator`;
-    filterOperatorSelect.setAttribute("aria-label", "Filter comparison");
+    filterOperatorSelect.setAttribute("aria-label", "Filter condition");
     for (const operator of AAP_PROFILE_SORT.FILTER_OPERATORS) {
       filterOperatorSelect.appendChild(new Option(operator.label, operator.key));
     }
 
+    const filterOperatorLabel = createElement("span", "aap-profile-filter-operator-label", "Condition");
+    filterOperatorLabel.setAttribute("aria-hidden", "true");
+
     const filterInput = createElement("input", "aap-profile-filter-input");
+    filterInput.id = `${filterSelect.id}-threshold`;
     filterInput.type = "number";
     filterInput.min = "0";
     filterInput.step = "1";
-    filterInput.placeholder = "Value";
+    filterInput.inputMode = "numeric";
+    filterInput.placeholder = "e.g. 100";
     filterInput.setAttribute("aria-label", "Filter threshold");
+    const filterThresholdLabel = createElement("label", "aap-profile-filter-threshold-label", "Threshold");
+    filterThresholdLabel.htmlFor = filterInput.id;
     if (state.filter) {
       filterSelect.value = state.filter.key;
       filterOperatorSelect.value = state.filter.operator;
@@ -508,20 +501,32 @@
     clearFilterButton.hidden = true;
     clearFilterButton.addEventListener("click", clearFilter);
 
-    const status = createElement("span", "aap-profile-sort-status");
-    host.append(
-      label,
-      select,
-      directionButton,
+    const sortGroup = createElement("div", "aap-profile-sort-group");
+    sortGroup.setAttribute("role", "group");
+    sortGroup.setAttribute("aria-label", "Sort public Actors");
+    sortGroup.append(label, select, directionButton);
+
+    const filterGroup = createElement("div", "aap-profile-filter-group");
+    filterGroup.setAttribute("role", "group");
+    filterGroup.setAttribute("aria-label", "Filter public Actors");
+    filterGroup.append(
       filterLabel,
       filterSelect,
+      filterOperatorLabel,
       filterOperatorSelect,
+      filterThresholdLabel,
       filterInput,
       applyFilterButton,
       clearFilterButton,
       retryButton,
-      status,
     );
+
+    const status = createElement("span", "aap-profile-sort-status");
+    status.id = `${filterSelect.id}-status`;
+    status.setAttribute("role", "status");
+    status.setAttribute("aria-live", "polite");
+    filterInput.setAttribute("aria-describedby", status.id);
+    host.append(sortGroup, filterGroup, status);
     state.host = host;
     state.select = select;
     state.directionButton = directionButton;

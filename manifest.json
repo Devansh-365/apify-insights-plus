@@ -43,6 +43,7 @@
         "lib/range.js",
         "lib/actor-detail.js",
         "lib/profile-sort.js",
+        "lib/benchmark.js",
         "lib/api.js",
         "lib/cache.js",
         "lib/insights-nav.js",
@@ -52,7 +53,8 @@
         "content/acquisition.js",
         "content/debugging.js",
         "content/actor-detail.js",
-        "content/profile-sort.js"
+        "content/profile-sort.js",
+        "content/benchmark.js"
       ],
       "css": [
         "content/app.css"
