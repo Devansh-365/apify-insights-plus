@@ -10,7 +10,7 @@ vm.runInNewContext(fs.readFileSync("lib/context.js", "utf8"), context);
 assert.equal(context.self.AAP_CONTEXT.organizationKey(), "org-acme-123");
 assert.equal(context.self.AAP_CONTEXT.organizationKey("/actors/insights/monetization"), "personal");
 
-const store = { "aap.cacheVersion": "6" };
+const store = { "aap.cacheVersion": "7" };
 const changeListeners = [];
 const storage = {
   async get(keys) {
@@ -65,6 +65,13 @@ vm.runInNewContext(fs.readFileSync("lib/cache.js", "utf8"), cacheContext);
   assert.equal(expiredBenchmark.hit, true);
   assert.equal(expiredBenchmark.stale, true, "benchmark snapshots become stale after 24 hours");
 
+  const oversized = await cacheContext.self.AAP_CACHE.setView(
+    "builder-benchmark",
+    { payload: "x".repeat(2 * 1024 * 1024) },
+    "local",
+  );
+  assert.equal(oversized, false, "oversized snapshots report that they were not cached");
+
   const removed = await cacheContext.self.AAP_CACHE.clearAll();
   assert.equal(removed, 2);
   assert.equal((await cacheContext.self.AAP_CACHE.getView("quality", 60_000, "org-acme")).hit, false);
@@ -102,7 +109,7 @@ vm.runInNewContext(fs.readFileSync("lib/cache.js", "utf8"), cacheContext);
   };
   vm.runInNewContext(fs.readFileSync("lib/cache.js", "utf8"), oldCacheContext);
   await oldCacheContext.self.AAP_CACHE.getView("quality", 60_000, "org-acme");
-  assert.equal(oldStore["aap.cacheVersion"], "6");
+  assert.equal(oldStore["aap.cacheVersion"], "7");
   assert.equal(Object.keys(oldStore).some((key) => key.includes("old")), false, "cache version changes must remove incompatible entries");
   console.log("context and cache tests passed");
 })().catch((error) => {

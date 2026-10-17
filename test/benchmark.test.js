@@ -53,6 +53,35 @@ const snapshot = benchmark.buildSnapshot({
   scan: { expectedActors: 350, indexedActors: 350, pageCount: 1, baseline: false },
 });
 assert.equal(benchmark.validateSnapshot(snapshot), true);
+const compactSnapshot = benchmark.compactSnapshot(snapshot);
+assert.equal(Object.keys(compactSnapshot.actorFirstSeen).length, 0, "durable compact snapshots omit per-Actor history");
+assert.equal(benchmark.validateSnapshot(compactSnapshot), true, "compact rank snapshots remain valid");
+const minimalSnapshot = benchmark.minimalSnapshot(snapshot);
+assert.equal(Object.keys(minimalSnapshot.actorFirstSeen).length, 0, "minimal rank snapshots omit per-Actor history");
+assert.equal(benchmark.validateSnapshot(minimalSnapshot), true, "minimal rank snapshots remain valid");
+const largeSnapshot = benchmark.buildSnapshot({
+  builders: Array.from({ length: 8_521 }, (_, index) => ({
+    key: `builder-${index}`,
+    displayName: `Builder ${index}`,
+    actorCount: 10,
+    metrics: {
+      totalActors: 10,
+      monthlyUsers: index + 1,
+      totalUsers: index + 2,
+      monthlyRuns: index + 3,
+      totalRuns: index + 4,
+      newlyIndexedActors: 0,
+    },
+    missing: {},
+  })),
+  actorFirstSeen: Object.fromEntries(Array.from({ length: 90_317 }, (_, index) => [
+    `actor-${index}`,
+    "2026-10-17T00:00:00.000Z",
+  ])),
+  scan: { expectedActors: 90_317, indexedActors: 90_317 },
+});
+assert.ok(JSON.stringify(largeSnapshot).length > 2 * 1024 * 1024, "large scan snapshots reproduce the storage-limit case");
+assert.ok(JSON.stringify(benchmark.compactSnapshot(largeSnapshot)).length < 2 * 1024 * 1024, "large rank snapshots fit the cache after compaction");
 assert.equal(benchmark.validateSnapshot({ ...snapshot, schemaVersion: 999 }), false);
 assert.equal(benchmark.validateSnapshot({ ...snapshot, schemaVersion: 2 }), false, "previous benchmark caches are invalidated");
 assert.equal(benchmark.validateSnapshot({ ...snapshot, schemaVersion: 3 }), false, "local benchmark caches are invalidated after the rank-source change");

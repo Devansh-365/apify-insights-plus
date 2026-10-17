@@ -222,8 +222,12 @@
 
   async function scanStore(previousSnapshot) {
     const capturedAt = new Date().toISOString();
+    const previousFirstSeen = previousSnapshot?.actorFirstSeen
+      && Object.keys(previousSnapshot.actorFirstSeen).length
+      ? previousSnapshot.actorFirstSeen
+      : null;
     const accumulator = AAP_BENCHMARK.createAccumulator({
-      previousFirstSeen: previousSnapshot?.actorFirstSeen || null,
+      previousFirstSeen,
       firstSeenAt: capturedAt,
     });
     let expectedActors = null;
@@ -298,11 +302,25 @@
         coverage: sourceWindowEnded || accumulator.indexedActors < expectedActors ? "observed" : "complete",
         missingFields: missingFieldCounts(builders),
         definitionVersion: 1,
-        baseline: !previousSnapshot,
+        baseline: !previousFirstSeen,
       },
     });
     if (!AAP_BENCHMARK.validateSnapshot(snapshot)) throw new Error("The benchmark snapshot failed validation.");
-    await AAP_CACHE.setView(SNAPSHOT_NAME, snapshot, SNAPSHOT_SCOPE);
+    const saved = await AAP_CACHE.setView(SNAPSHOT_NAME, snapshot, SNAPSHOT_SCOPE);
+    if (!saved) {
+      const compactSaved = await AAP_CACHE.setView(
+        SNAPSHOT_NAME,
+        AAP_BENCHMARK.compactSnapshot(snapshot),
+        SNAPSHOT_SCOPE,
+      );
+      if (!compactSaved) {
+        await AAP_CACHE.setView(
+          SNAPSHOT_NAME,
+          AAP_BENCHMARK.minimalSnapshot(snapshot),
+          SNAPSHOT_SCOPE,
+        );
+      }
+    }
     return snapshot;
   }
 
