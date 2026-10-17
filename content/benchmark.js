@@ -6,6 +6,7 @@
   const TARGET_NAME = "builder-benchmark-target";
   const TARGET_TTL_MS = 15 * 60 * 1000;
   const SNAPSHOT_TTL_MS = AAP_BENCHMARK.SNAPSHOT_TTL_MS || 24 * 60 * 60 * 1000;
+  const SHARED_SNAPSHOT_URL = "https://gist.githubusercontent.com/Devansh-365/5cffdc0292be6bf8f8223eaa33ae1d74/raw";
   const PAGE_SIZE = 1000;
   const SCAN_PAGE_INTERVAL_MS = 1_100;
   const SCAN_SORTS = ["relevance", "popularity", "newest", "lastUpdate"];
@@ -141,6 +142,21 @@
     return setTargetBuilder(routeKey, AAP_BENCHMARK.findBuilder(snapshot?.builders, routeKey));
   }
 
+  async function fetchSharedSnapshot() {
+    const url = new URL(SHARED_SNAPSHOT_URL);
+    // Refresh at most once per snapshot window while still bypassing a stale
+    // browser/CDN response after the daily publisher has written a new file.
+    url.searchParams.set("v", Math.floor(Date.now() / SNAPSHOT_TTL_MS));
+    const response = await fetch(url.toString(), {
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+    });
+    if (!response.ok) throw new Error(`Shared Builder Benchmark request failed: HTTP ${response.status}`);
+    const snapshot = await response.json();
+    if (!AAP_BENCHMARK.validateSnapshot(snapshot)) throw new Error("The shared Builder Benchmark snapshot is invalid.");
+    return snapshot;
+  }
+
   async function loadTargetBuilder(routeKey, username, snapshotPromise) {
     if (state.targetBuilderPromise) return state.targetBuilderPromise;
     state.targetBuilderStatus = "loading";
@@ -206,28 +222,52 @@
   async function loadSnapshot(routeKey) {
     if (state.snapshotPromise) return state.snapshotPromise;
     const operation = (async () => {
+      let cachedSnapshot = null;
       try {
         const cached = await AAP_CACHE.getView(SNAPSHOT_NAME, SNAPSHOT_TTL_MS, SNAPSHOT_SCOPE);
-        if (state.routeKey !== routeKey || !cached.hit || !AAP_BENCHMARK.validateSnapshot(cached.data)) return;
-        state.snapshot = cached.data;
-        state.snapshotStale = Boolean(cached.stale);
-      } catch (error) {
-        if (state.routeKey === routeKey) state.scanError = error?.message || "The local benchmark snapshot could not be read.";
-      } finally {
         if (state.routeKey !== routeKey) return;
-        if (state.snapshotPromise === operation) state.snapshotPromise = null;
-        const shouldAutoScan = !activeScan && (!state.snapshot || state.snapshotStale);
-        if (shouldAutoScan) {
-          state.scanStatus = "scanning";
-          state.scanError = null;
-        } else if (activeScan) {
-          state.scanStatus = "scanning";
-        } else {
-          state.scanStatus = "complete";
+        if (cached.hit && AAP_BENCHMARK.validateSnapshot(cached.data)) {
+          cachedSnapshot = cached.data;
+          state.snapshot = cached.data;
+          state.snapshotStale = Boolean(cached.stale) || cached.data.scan?.distribution !== "shared";
         }
-        render();
-        if (shouldAutoScan) startScan();
+      } catch (error) {
+        if (state.routeKey === routeKey) state.scanError = error?.message || "The benchmark snapshot could not be read.";
       }
+
+      const shouldRefreshShared = !cachedSnapshot || state.snapshotStale;
+      if (shouldRefreshShared) {
+        try {
+          const sharedSnapshot = await fetchSharedSnapshot();
+          if (state.routeKey !== routeKey) return;
+          state.snapshot = sharedSnapshot;
+          state.snapshotStale = false;
+          state.scanError = null;
+          // Keep a small local fallback for offline reloads. The shared Gist
+          // remains authoritative and is retried after the 24-hour TTL.
+          AAP_CACHE.setView(SNAPSHOT_NAME, sharedSnapshot, SNAPSHOT_SCOPE).catch(() => {});
+        } catch (error) {
+          if (state.routeKey === routeKey) {
+            state.scanError = error?.message || "The shared benchmark snapshot could not be loaded.";
+          }
+        }
+      }
+
+      if (state.routeKey !== routeKey) return;
+      if (state.snapshotPromise === operation) state.snapshotPromise = null;
+      const shouldAutoScan = !activeScan && !state.snapshot;
+      if (shouldAutoScan) {
+        state.scanStatus = "scanning";
+        state.scanError = null;
+      } else if (activeScan) {
+        state.scanStatus = "scanning";
+      } else if (state.snapshotStale) {
+        state.scanStatus = "incomplete";
+      } else {
+        state.scanStatus = "complete";
+      }
+      render();
+      if (shouldAutoScan) startScan();
     })();
     state.snapshotPromise = operation;
     return operation;

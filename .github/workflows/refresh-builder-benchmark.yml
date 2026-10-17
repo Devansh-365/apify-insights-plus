@@ -1,0 +1,31 @@
+name: Refresh Builder Benchmark
+
+on:
+  schedule:
+    # 09:17 Asia/Kolkata. GitHub may start scheduled jobs a few minutes late.
+    - cron: "17 3 * * *"
+      timezone: "Asia/Kolkata"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out benchmark logic
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build and publish shared snapshot
+        env:
+          BUILDER_BENCHMARK_GIST_ID: ${{ secrets.BUILDER_BENCHMARK_GIST_ID }}
+          BUILDER_BENCHMARK_GIST_TOKEN: ${{ secrets.BUILDER_BENCHMARK_GIST_TOKEN }}
+          BUILDER_BENCHMARK_FILENAME: builder-rankings.json
+        run: node scripts/refresh-builder-benchmark.js

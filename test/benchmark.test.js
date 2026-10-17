@@ -122,6 +122,17 @@ const observedTag = benchmark.buildTagModel({
 assert.match(observedTag.ariaLabel, /local rank 1 of 2 local observed cohort/);
 assert.match(observedTag.ariaLabel, /350 of 1,000 Actors observed/);
 
+const sharedSnapshot = benchmark.buildSnapshot({
+  builders: snapshot.builders,
+  scan: { ...snapshot.scan, distribution: "shared" },
+});
+const sharedTag = benchmark.buildTagModel({
+  snapshot: sharedSnapshot,
+  result: benchmark.rankForBuilder(sharedSnapshot.builders, "builder-a", "monthlyRuns"),
+  metricKey: "monthlyRuns",
+});
+assert.match(sharedTag.ariaLabel, /shared rank 1 of 2 shared public Store cohort/);
+
 const replacedBuilders = benchmark.mergeBuilder(snapshot.builders, {
   key: "builder-a",
   actorCount: 999,
