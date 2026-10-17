@@ -88,6 +88,11 @@
     return Number.isFinite(value) && value >= 0 ? Math.floor(value) : null;
   }
 
+  function responsePageAdvance(response) {
+    const value = Number(AAP_PROFILE_SORT.responseData(response)?.count);
+    return Number.isFinite(value) && value > 0 && value <= PAGE_SIZE ? Math.floor(value) : PAGE_SIZE;
+  }
+
   function missingFieldCounts(builders) {
     const counts = {};
     for (const builder of builders) {
@@ -235,7 +240,13 @@
     if (state.snapshot) {
       appendBenchmarkSummary(panel, result);
       const cohort = result?.cohortSize || 0;
-      const coverage = `${formatNumber(cohort)} complete builders · ${formatNumber(state.snapshot.scan?.indexedActors || 0)} indexed Actors`;
+      const scan = state.snapshot.scan || {};
+      const indexedActors = Number(scan.indexedActors) || 0;
+      const sourceTotal = Number(scan.sourceTotal ?? scan.expectedActors);
+      const sourceNote = scan.sourceWindowEnded && Number.isFinite(sourceTotal) && sourceTotal > indexedActors
+        ? ` · public Store reports ${formatNumber(sourceTotal)} total`
+        : "";
+      const coverage = `${formatNumber(cohort)} complete builders · ${formatNumber(indexedActors)} Actors indexed${sourceNote}`;
       panel.appendChild(createElement(
         "div",
         "aap-profile-benchmark-meta",
@@ -303,6 +314,8 @@
     let expectedActors = null;
     let offset = 0;
     let pageCount = 0;
+    let sourceTotalChanged = false;
+    let sourceWindowEnded = false;
     const visitedOffsets = new Set();
 
     while (true) {
@@ -319,11 +332,15 @@
       const pageTotal = responseTotal(response);
       if (expectedActors == null && pageTotal != null) expectedActors = pageTotal;
       if (expectedActors != null && pageTotal != null && pageTotal !== expectedActors) {
-        throw new Error("The public Store changed while the benchmark was scanning. Retry the scan.");
+        sourceTotalChanged = true;
+        expectedActors = Math.max(expectedActors, pageTotal);
       }
       const actors = AAP_PROFILE_SORT.normalizeStoreResponse(response, offset);
       if (!actors.length) {
-        if (expectedActors != null && offset < expectedActors) throw new Error("The public Store returned an incomplete page.");
+        // The public Store exposes a large source total but may return an empty
+        // page after its public pagination window. Treat that as the end of
+        // the locally observable cohort instead of rejecting a usable rank.
+        sourceWindowEnded = expectedActors != null && offset < expectedActors;
         break;
       }
       AAP_BENCHMARK.addActors(accumulator, actors);
@@ -331,20 +348,14 @@
       scanProgress = { expectedActors, indexedActors: accumulator.indexedActors, pageCount };
       if (state.scanStatus === "scanning") render();
 
-      const nextOffset = offset + PAGE_SIZE;
+      const nextOffset = offset + responsePageAdvance(response);
       if (expectedActors != null && nextOffset >= expectedActors) break;
-      if (actors.length < PAGE_SIZE) {
-        if (expectedActors == null) break;
-        throw new Error("The public Store ended before its reported total. Retry the scan.");
-      }
       offset = nextOffset;
     }
 
     if (expectedActors == null) expectedActors = accumulator.indexedActors;
     if (accumulator.conflictingActors) throw new Error("The public Store returned conflicting data for an Actor. Retry the scan.");
-    if (accumulator.indexedActors !== expectedActors) {
-      throw new Error(`Scan coverage is incomplete: ${accumulator.indexedActors.toLocaleString()} of ${expectedActors.toLocaleString()} Actors indexed.`);
-    }
+    if (!accumulator.indexedActors && expectedActors) throw new Error("The public Store returned no observable Actors. Retry the scan.");
 
     const builders = AAP_BENCHMARK.finalizeBuilders(accumulator);
     const actorFirstSeen = { ...(previousSnapshot?.actorFirstSeen || {}) };
@@ -359,6 +370,9 @@
         expectedActors,
         indexedActors: accumulator.indexedActors,
         pageCount,
+        sourceTotal: expectedActors,
+        sourceTotalChanged,
+        sourceWindowEnded,
         missingFields: missingFieldCounts(builders),
         definitionVersion: 1,
         baseline: !previousSnapshot,
