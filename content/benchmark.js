@@ -7,6 +7,7 @@
   const SNAPSHOT_SCOPE = "local";
   const SNAPSHOT_TTL_MS = 24 * 60 * 60 * 1000;
   const PAGE_SIZE = 1000;
+  const SCAN_PAGE_INTERVAL_MS = 1_100;
   const METRIC_PREFERENCE_KEY = "aap.builderBenchmark.metric";
   const state = {
     routeKey: null,
@@ -32,6 +33,10 @@
     if (className) element.className = className;
     if (text != null) element.textContent = text;
     return element;
+  }
+
+  function wait(milliseconds) {
+    return new Promise((resolve) => setTimeout(resolve, milliseconds));
   }
 
   function profileRoute() {
@@ -302,6 +307,7 @@
 
     while (true) {
       if (visitedOffsets.has(offset)) throw new Error("The public Store returned a repeated page offset.");
+      if (pageCount > 0) await wait(SCAN_PAGE_INTERVAL_MS);
       visitedOffsets.add(offset);
       const response = await AAP_API.publicStorePage({
         limit: PAGE_SIZE,

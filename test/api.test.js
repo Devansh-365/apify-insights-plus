@@ -20,6 +20,7 @@ const publicFetchOptions = [];
 let cacheReads = 0;
 let cacheWrites = 0;
 let requestNumber = 0;
+let throttledPublicAttempts = 0;
 const window = {
   addEventListener(type, listener) {
     (listeners.get(type) || listeners.set(type, []).get(type)).push(listener);
@@ -41,8 +42,17 @@ const context = {
   setTimeout,
   clearTimeout,
   fetch: async (url, options) => {
-    publicRequests.push(new URL(url));
+    const parsedUrl = new URL(url);
+    publicRequests.push(parsedUrl);
     publicFetchOptions.push(options);
+    if (parsedUrl.pathname === "/v2/store" && parsedUrl.searchParams.get("offset") === "3000" && throttledPublicAttempts++ === 0) {
+      return {
+        ok: false,
+        status: 429,
+        headers: { get: () => "0" },
+        async json() { return { message: "rate limited" }; },
+      };
+    }
     return {
       ok: true,
       status: 200,
@@ -164,6 +174,14 @@ window.dispatchEvent(new SimpleCustomEvent("aap-auth-scope", { detail: "account-
   assert.equal(cacheReads, readsBeforeNoStore, "no-store benchmark pages must bypass raw cache reads");
   assert.equal(cacheWrites, writesBeforeNoStore, "no-store benchmark pages must bypass raw cache writes");
   assert.equal(noStoreResults[0].data.id, noStoreResults[1].data.id);
+  const retriedPublicStore = await context.self.AAP_API.publicStorePage({
+    limit: 1000,
+    offset: 3000,
+    cacheMode: "no-store",
+    priority: "background",
+  });
+  assert.equal(retriedPublicStore.data.id, "public-actor");
+  assert.equal(throttledPublicAttempts, 2, "public 429 responses should be retried");
   assert.throws(() => context.self.AAP_API.publicStorePage({ offset: -1 }), /Invalid public Store page offset/);
   console.log("API pooling, deduplication, and lazy range request tests passed");
 })().catch((error) => {
