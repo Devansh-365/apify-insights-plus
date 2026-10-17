@@ -6,6 +6,8 @@ const context = { self: {} };
 vm.runInNewContext(fs.readFileSync("lib/profile-sort.js", "utf8"), context);
 const helpers = context.self.AAP_PROFILE_SORT;
 
+assert.deepEqual(Array.from(helpers.RANK_METRIC_KEYS), ["totalUsers", "monthlyUsers", "totalRuns", "monthlyRuns"]);
+
 assert.equal(helpers.profileRoute("/builder-name").key, "builder-name");
 assert.equal(helpers.profileRoute("/builder-name").username, "builder-name");
 assert.equal(helpers.profileRoute("/store"), null);
@@ -58,7 +60,10 @@ const actors = helpers.normalizeStoreResponse(response);
 assert.equal(helpers.storeTotal(response), 4);
 assert.equal(helpers.actorKey(actors[0]), "builder/actor-a");
 assert.equal(actors[0].mau, 3);
+assert.equal(actors[0].monthlyUsers, 3);
 assert.equal(actors[0].monthlyRuns, 7);
+assert.equal(actors[0].totalRuns, 12);
+assert.equal(actors[0].totalUsers, 8);
 assert.equal(actors[1].bookmarks, 5);
 assert.equal(actors[0].actorReviewCount, 2);
 assert.equal(actors[1].actorReviewCount, 5);

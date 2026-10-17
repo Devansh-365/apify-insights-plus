@@ -54,8 +54,19 @@ vm.runInNewContext(fs.readFileSync("lib/cache.js", "utf8"), cacheContext);
   assert.equal((await cacheContext.self.AAP_CACHE.getView("quality", 60_000, "org-acme")).hit, true);
   assert.equal(Object.keys(store).some((key) => key.startsWith("aap.view.")), true);
 
+  await cacheContext.self.AAP_CACHE.setView("builder-benchmark", { schemaVersion: 5 }, "local");
+  const benchmarkKey = "aap.view.builder-benchmark:local";
+  store[benchmarkKey].updatedAt = Date.now() - (24 * 60 * 60 * 1000) - 1;
+  const expiredBenchmark = await cacheContext.self.AAP_CACHE.getView(
+    "builder-benchmark",
+    24 * 60 * 60 * 1000,
+    "local",
+  );
+  assert.equal(expiredBenchmark.hit, true);
+  assert.equal(expiredBenchmark.stale, true, "benchmark snapshots become stale after 24 hours");
+
   const removed = await cacheContext.self.AAP_CACHE.clearAll();
-  assert.equal(removed, 1);
+  assert.equal(removed, 2);
   assert.equal((await cacheContext.self.AAP_CACHE.getView("quality", 60_000, "org-acme")).hit, false);
 
   const oldStore = {

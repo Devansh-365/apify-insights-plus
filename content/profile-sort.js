@@ -6,6 +6,11 @@
   const PAGE_CLASS = "aap-profile-sort-page";
   const PAGE_SIZE = 1000;
   const CATALOG_TTL_MS = 15 * 60 * 1000;
+  const RANK_METRIC_KEYS = AAP_PROFILE_SORT.RANK_METRIC_KEYS || ["totalUsers", "monthlyUsers", "totalRuns", "monthlyRuns"];
+  const NATIVE_METRIC_LABELS = {
+    totalUsers: ["total users"],
+    monthlyUsers: ["monthly users", "monthly active users"],
+  };
   const catalogCache = new Map();
   const catalogFetches = new Map();
   const state = {
@@ -81,17 +86,62 @@
     }).format(value);
   }
 
+  function normalizedMetricText(value) {
+    return String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
+  }
+
+  function metricLabelMatches(node, labels) {
+    const text = normalizedMetricText(node?.textContent);
+    return labels.some((label) => text === label || text.endsWith(` ${label}`));
+  }
+
+  function findNativeMetricLabel(mount, labels) {
+    return [...mount.querySelectorAll("p, span")].find((node) => (
+      !node.closest(`.${PROFILE_STATS_HOST_CLASS}`)
+      && node.children.length === 0
+      && metricLabelMatches(node, labels)
+    ));
+  }
+
+  function clearNativeMetricDecorations() {
+    document.querySelectorAll("[data-aap-profile-native-metric-row]").forEach((row) => {
+      row.querySelectorAll("[data-aap-profile-benchmark-tag]").forEach((slot) => slot.remove());
+      row.querySelectorAll(".aap-profile-native-metric-label").forEach((label) => {
+        label.classList.remove("aap-profile-native-metric-label");
+      });
+      row.classList.remove("aap-profile-native-metric-row");
+      delete row.dataset.aapProfileNativeMetric;
+    });
+  }
+
+  function decorateNativeMetricRows(mount) {
+    for (const [metricKey, labels] of Object.entries(NATIVE_METRIC_LABELS)) {
+      const label = findNativeMetricLabel(mount, labels);
+      const row = label?.parentElement;
+      if (!row || row === mount) continue;
+      row.classList.add("aap-profile-native-metric-row");
+      row.dataset.aapProfileNativeMetric = metricKey;
+      label.classList.add("aap-profile-native-metric-label");
+      let slot = row.querySelector(`[data-aap-profile-benchmark-tag="${metricKey}"]`);
+      if (!slot) {
+        slot = createElement("span", "aap-profile-benchmark-slot aap-profile-benchmark-slot-row");
+        slot.dataset.aapProfileBenchmarkTag = metricKey;
+        row.appendChild(slot);
+      }
+    }
+  }
+
   function renderProfileStats() {
     if (!state.profileStatsHost?.isConnected) return;
     const loading = state.profileStatsLoading;
     const error = state.profileStatsError;
     const runMetrics = [
-      ["Total runs", state.profileStats?.totalRuns, "↗"],
-      ["Monthly runs", state.profileStats?.monthlyRuns, "↻"],
+      ["totalRuns", "Total runs", state.profileStats?.totalRuns, "↗"],
+      ["monthlyRuns", "Monthly runs", state.profileStats?.monthlyRuns, "↻"],
     ];
     const communityMetrics = [
-      ["Reviews", state.profileStats?.totalReviews, "☆"],
-      ["Bookmarks", state.profileStats?.totalBookmarks, "▱"],
+      [null, "Reviews", state.profileStats?.totalReviews, "☆"],
+      [null, "Bookmarks", state.profileStats?.totalBookmarks, "▱"],
     ];
     const createHeading = (text, className) => {
       const heading = createElement("div", className, text);
@@ -99,7 +149,20 @@
       heading.setAttribute("aria-level", "4");
       return heading;
     };
-    const createRows = (metrics, className) => metrics.map(([label, value, icon]) => {
+    const reusableSlots = new Map(
+      [...state.profileStatsHost.querySelectorAll("[data-aap-profile-benchmark-tag]")]
+        .map((slot) => [slot.dataset.aapProfileBenchmarkTag, slot])
+        .filter(([metricKey]) => RANK_METRIC_KEYS.includes(metricKey)),
+    );
+    const takeRankSlot = (metricKey) => {
+      if (!metricKey) return null;
+      const slot = reusableSlots.get(metricKey) || createElement("span", "aap-profile-benchmark-slot aap-profile-benchmark-slot-row");
+      slot.classList.add("aap-profile-benchmark-slot", "aap-profile-benchmark-slot-row");
+      slot.dataset.aapProfileBenchmarkTag = metricKey;
+      reusableSlots.delete(metricKey);
+      return slot;
+    };
+    const createRows = (metrics, className) => metrics.map(([metricKey, label, value, icon]) => {
       const row = createElement("div", `aap-profile-run-metric ${className}`.trim());
       const iconElement = createElement("span", "aap-profile-run-metric-icon", icon);
       iconElement.setAttribute("aria-hidden", "true");
@@ -110,28 +173,15 @@
         createElement("span", "aap-profile-run-metric-label", label),
       );
       row.append(iconElement, text);
+      const rankSlot = takeRankSlot(metricKey);
+      if (rankSlot) row.appendChild(rankSlot);
       if (error) row.title = error;
       return row;
     });
-    const benchmarkSlot = state.profileStatsHost.querySelector("[data-aap-profile-benchmark-tag]") || createElement("span", "aap-profile-benchmark-slot");
-    benchmarkSlot.setAttribute("data-aap-profile-benchmark-tag", "true");
-    let benchmarkRegion = state.profileStatsHost.querySelector("[data-aap-profile-benchmark-details]");
-    if (!benchmarkRegion) {
-      benchmarkRegion = createElement("div", "aap-profile-benchmark-region");
-      benchmarkRegion.hidden = true;
-    }
-    benchmarkRegion.setAttribute("data-aap-profile-benchmark-details", "true");
-    benchmarkRegion.id = "aap-profile-benchmark-details";
-    benchmarkRegion.setAttribute("role", "region");
-    benchmarkRegion.setAttribute("aria-label", "Builder benchmark details");
     const headingRow = createElement("div", "aap-profile-run-metric-heading-row");
-    headingRow.append(
-      createHeading("Run activity", "aap-profile-run-metric-heading"),
-      benchmarkSlot,
-    );
+    headingRow.append(createHeading("Run activity", "aap-profile-run-metric-heading"));
     state.profileStatsHost.replaceChildren(
       headingRow,
-      benchmarkRegion,
       ...createRows(runMetrics, ""),
       createHeading("Community", "aap-profile-community-heading"),
       ...createRows(communityMetrics, "aap-profile-community-metric"),
@@ -141,6 +191,7 @@
   }
 
   function resetProfileStats() {
+    clearNativeMetricDecorations();
     state.profileStatsHost?.remove();
     state.profileStatsRouteKey = null;
     state.profileStatsHost = null;
@@ -188,13 +239,20 @@
     const mount = findProfileStatsMount();
     if (!mount) return;
 
+    decorateNativeMetricRows(mount);
+
     let host = mount.querySelector(`.${PROFILE_STATS_HOST_CLASS}`);
+    const hostCreated = !host;
     if (!host) {
       host = createElement("div", PROFILE_STATS_HOST_CLASS);
       mount.appendChild(host);
     }
     state.profileStatsHost = host;
-    renderProfileStats();
+    const hasLegacyBenchmarkRegion = Boolean(host.querySelector("[data-aap-profile-benchmark-details]"));
+    const hasRunRankSlots = RANK_METRIC_KEYS
+      .filter((metricKey) => metricKey === "totalRuns" || metricKey === "monthlyRuns")
+      .every((metricKey) => host.querySelector(`[data-aap-profile-benchmark-tag="${metricKey}"]`));
+    if (hostCreated || hasLegacyBenchmarkRegion || !hasRunRankSlots) renderProfileStats();
     if (!state.profileStats && !state.profileStatsLoading && !state.profileStatsError) loadProfileStats(route);
   }
 

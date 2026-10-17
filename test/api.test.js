@@ -152,6 +152,7 @@ window.dispatchEvent(new SimpleCustomEvent("aap-auth-scope", { detail: "account-
     limit: 1000,
     offset: 1000,
     sortBy: "newest",
+    includeUnrunnableActors: true,
     priority: "background",
   });
   assert.equal(publicRequests.length, 2);
@@ -160,6 +161,7 @@ window.dispatchEvent(new SimpleCustomEvent("aap-auth-scope", { detail: "account-
   assert.equal(publicRequests[1].searchParams.get("limit"), "1000");
   assert.equal(publicRequests[1].searchParams.get("offset"), "1000");
   assert.equal(publicRequests[1].searchParams.get("sortBy"), "newest");
+  assert.equal(publicRequests[1].searchParams.get("includeUnrunnableActors"), "true");
   assert.equal(publicStore.data.id, "public-actor");
 
   const readsBeforeNoStore = cacheReads;
