@@ -11,7 +11,7 @@ vm.runInNewContext(fs.readFileSync("lib/context.js", "utf8"), context);
 assert.equal(context.self.AAP_CONTEXT.organizationKey(), "org-acme-123");
 assert.equal(context.self.AAP_CONTEXT.organizationKey("/actors/insights/monetization"), "personal");
 
-const store = { "aap.cacheVersion": "7" };
+const store = { "aap.cacheVersion": "8" };
 const changeListeners = [];
 let failNextStorageWrite = false;
 const storage = {
@@ -142,7 +142,7 @@ vm.runInNewContext(fs.readFileSync("lib/cache.js", "utf8"), cacheContext);
   };
   vm.runInNewContext(fs.readFileSync("lib/cache.js", "utf8"), oldCacheContext);
   await oldCacheContext.self.AAP_CACHE.getView("quality", 60_000, "org-acme");
-  assert.equal(oldStore["aap.cacheVersion"], "7");
+  assert.equal(oldStore["aap.cacheVersion"], "8");
   assert.equal(Object.keys(oldStore).some((key) => key.includes("old")), false, "cache version changes must remove incompatible entries");
   console.log("context and cache tests passed");
 })().catch((error) => {

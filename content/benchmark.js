@@ -1,8 +1,6 @@
 /* Adds automatic local Builder Benchmark ranks to Apify profile metrics. */
 (function () {
   const TAG_SLOT_SELECTOR = "[data-aap-profile-benchmark-tag]";
-  const SNAPSHOT_NAME = "builder-benchmark";
-  const SNAPSHOT_SCOPE = "local";
   const TARGET_NAME = "builder-benchmark-target";
   const TARGET_TTL_MS = 15 * 60 * 1000;
   const SNAPSHOT_TTL_MS = AAP_BENCHMARK.SNAPSHOT_TTL_MS || 24 * 60 * 60 * 1000;
@@ -31,6 +29,9 @@
   };
 
   let activeScan = null;
+  let sharedSnapshotMemory = null;
+  let sharedSnapshotFetchedAt = 0;
+  let sharedSnapshotPromise = null;
   let scanProgress = { expectedActors: null, indexedActors: 0, pageCount: 0 };
   let lastPath = location.pathname;
 
@@ -148,13 +149,32 @@
     // browser/CDN response after the daily publisher has written a new file.
     url.searchParams.set("v", Math.floor(Date.now() / SNAPSHOT_TTL_MS));
     const response = await fetch(url.toString(), {
-      cache: "no-store",
+      cache: "no-cache",
       headers: { Accept: "application/json" },
     });
     if (!response.ok) throw new Error(`Shared Builder Benchmark request failed: HTTP ${response.status}`);
     const snapshot = await response.json();
     if (!AAP_BENCHMARK.validateSnapshot(snapshot)) throw new Error("The shared Builder Benchmark snapshot is invalid.");
     return snapshot;
+  }
+
+  function loadSharedSnapshot() {
+    if (sharedSnapshotMemory && Date.now() - sharedSnapshotFetchedAt < SNAPSHOT_TTL_MS) {
+      return Promise.resolve(sharedSnapshotMemory);
+    }
+    if (sharedSnapshotPromise) return sharedSnapshotPromise;
+
+    const operation = fetchSharedSnapshot()
+      .then((snapshot) => {
+        sharedSnapshotMemory = snapshot;
+        sharedSnapshotFetchedAt = Date.now();
+        return snapshot;
+      })
+      .finally(() => {
+        if (sharedSnapshotPromise === operation) sharedSnapshotPromise = null;
+      });
+    sharedSnapshotPromise = operation;
+    return operation;
   }
 
   async function loadTargetBuilder(routeKey, username, snapshotPromise) {
@@ -222,35 +242,20 @@
   async function loadSnapshot(routeKey) {
     if (state.snapshotPromise) return state.snapshotPromise;
     const operation = (async () => {
-      let cachedSnapshot = null;
+      const previousSnapshot = sharedSnapshotMemory;
       try {
-        const cached = await AAP_CACHE.getView(SNAPSHOT_NAME, SNAPSHOT_TTL_MS, SNAPSHOT_SCOPE);
+        const sharedSnapshot = await loadSharedSnapshot();
         if (state.routeKey !== routeKey) return;
-        if (cached.hit && AAP_BENCHMARK.validateSnapshot(cached.data)) {
-          cachedSnapshot = cached.data;
-          state.snapshot = cached.data;
-          state.snapshotStale = Boolean(cached.stale) || cached.data.scan?.distribution !== "shared";
-        }
+        state.snapshot = sharedSnapshot;
+        state.snapshotStale = false;
+        state.scanError = null;
       } catch (error) {
-        if (state.routeKey === routeKey) state.scanError = error?.message || "The benchmark snapshot could not be read.";
-      }
-
-      const shouldRefreshShared = !cachedSnapshot || state.snapshotStale;
-      if (shouldRefreshShared) {
-        try {
-          const sharedSnapshot = await fetchSharedSnapshot();
-          if (state.routeKey !== routeKey) return;
-          state.snapshot = sharedSnapshot;
-          state.snapshotStale = false;
-          state.scanError = null;
-          // Keep a small local fallback for offline reloads. The shared Gist
-          // remains authoritative and is retried after the 24-hour TTL.
-          AAP_CACHE.setView(SNAPSHOT_NAME, sharedSnapshot, SNAPSHOT_SCOPE).catch(() => {});
-        } catch (error) {
-          if (state.routeKey === routeKey) {
-            state.scanError = error?.message || "The shared benchmark snapshot could not be loaded.";
-          }
+        if (state.routeKey !== routeKey) return;
+        if (previousSnapshot && AAP_BENCHMARK.validateSnapshot(previousSnapshot)) {
+          state.snapshot = previousSnapshot;
+          state.snapshotStale = true;
         }
+        state.scanError = error?.message || "The shared benchmark snapshot could not be loaded.";
       }
 
       if (state.routeKey !== routeKey) return;
@@ -359,21 +364,6 @@
       },
     });
     if (!AAP_BENCHMARK.validateSnapshot(snapshot)) throw new Error("The benchmark snapshot failed validation.");
-    const saved = await AAP_CACHE.setView(SNAPSHOT_NAME, snapshot, SNAPSHOT_SCOPE);
-    if (!saved) {
-      const compactSaved = await AAP_CACHE.setView(
-        SNAPSHOT_NAME,
-        AAP_BENCHMARK.compactSnapshot(snapshot),
-        SNAPSHOT_SCOPE,
-      );
-      if (!compactSaved) {
-        await AAP_CACHE.setView(
-          SNAPSHOT_NAME,
-          AAP_BENCHMARK.minimalSnapshot(snapshot),
-          SNAPSHOT_SCOPE,
-        );
-      }
-    }
     return snapshot;
   }
 
@@ -393,7 +383,8 @@
     operation = scanStore(previousSnapshot)
       .then((snapshot) => {
         if (activeScan === operation) activeScan = null;
-        if (state.snapshot === previousSnapshot || !state.snapshot) {
+        const sharedSnapshotLoaded = state.snapshot?.scan?.distribution === "shared";
+        if ((!sharedSnapshotLoaded && state.snapshot === previousSnapshot) || !state.snapshot) {
           state.snapshot = snapshot;
           state.snapshotStale = false;
         }

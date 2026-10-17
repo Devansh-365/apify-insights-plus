@@ -11,7 +11,7 @@ This Chrome extension adds extra views to the [Apify Console Insights](https://c
 - **Public Actor pages:** See Active Users last 30 days, Runs last 30 days, Total/Lifetime runs, Created At, Pricing Updated, Last Run, and the public run-status chart on each public Actor detail page. If Apify exposes day-wise run data in a future response, the chart can render those daily bars; the current public API only publishes 30-day status totals.
 - **Public profiles:** Sort Actor cards by Runs, monthly runs, MAUs, Users, Bookmarks, or newest-created date, and filter them with numeric thresholds such as “MAUs at least 10” or “Runs more than 1,000.” Public profile Actor Stats also show account-wide total runs and monthly runs (last 30 days), loaded in the background from the same cached catalog without delaying the initial profile render.
 - **Cache:** Historical API responses are kept for 15 minutes. Current-month API responses are kept for 5 minutes, normalized public profile catalogs and target summaries for 15 minutes, and the per-Actor Monetization breakdown for 15 minutes. Cache writes share one quota-aware budget and degrade to live requests when storage is full. Use **Clear cache** in the popup to remove it.
-- **Builder Benchmark:** A scheduled GitHub Action scans Apify's public Store with the same aggregation logic used by the extension and publishes a compact, public snapshot. Profile ranking tags prefer that shared snapshot, refresh it daily, and keep a small local fallback for offline reloads. The snapshot reports when it represents the public Store's observed pagination window rather than a complete global cohort.
+- **Builder Benchmark:** A scheduled GitHub Action scans Apify's public Store with the same aggregation logic used by the extension and publishes a compact, public snapshot. Profile ranking tags use that shared snapshot, refresh it daily, and keep the large ranking dataset out of browser storage; a local scan remains an emergency fallback when the shared snapshot is unavailable. The snapshot reports when it represents the public Store's observed pagination window rather than a complete global cohort.
 
 ## Install manually from GitHub
 
@@ -29,7 +29,7 @@ When you install a new version, pull the latest changes, open `chrome://extensio
 The workflow in `.github/workflows/refresh-builder-benchmark.yml` runs daily and can also be started with **Run workflow**. It needs two repository Actions secrets:
 
 - `BUILDER_BENCHMARK_GIST_ID`: the public Gist that receives `builder-rankings.json`.
-- `BUILDER_BENCHMARK_GIST_TOKEN`: a GitHub token with only Gist write access, stored as an Actions secret and never shipped in the extension.
+- `BUILDER_BENCHMARK_GIST_TOKEN`: a GitHub token with Gist write access (prefer a fine-grained token limited to this purpose), stored as an Actions secret and never shipped in the extension.
 
 If the scan or publication fails, the workflow leaves the last successful snapshot untouched. GitHub Actions standard runners are free for public repositories.
 
