@@ -1,5 +1,6 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const { TextEncoder } = require("node:util");
 const vm = require("node:vm");
 
 const context = {
@@ -12,6 +13,7 @@ assert.equal(context.self.AAP_CONTEXT.organizationKey("/actors/insights/monetiza
 
 const store = { "aap.cacheVersion": "7" };
 const changeListeners = [];
+let failNextStorageWrite = false;
 const storage = {
   async get(keys) {
     if (keys == null) return { ...store };
@@ -19,6 +21,10 @@ const storage = {
     return Object.fromEntries(requested.filter((key) => key in store).map((key) => [key, store[key]]));
   },
   async set(values) {
+    if (failNextStorageWrite) {
+      failNextStorageWrite = false;
+      throw new Error("Resource::kQuotaBytes quota exceeded");
+    }
     const changes = {};
     for (const [key, value] of Object.entries(values)) {
       changes[key] = { oldValue: store[key], newValue: value };
@@ -39,6 +45,7 @@ const storage = {
 
 const cacheContext = {
   self: {},
+  TextEncoder,
   chrome: {
     storage: {
       local: storage,
@@ -67,10 +74,35 @@ vm.runInNewContext(fs.readFileSync("lib/cache.js", "utf8"), cacheContext);
 
   const oversized = await cacheContext.self.AAP_CACHE.setView(
     "builder-benchmark",
-    { payload: "x".repeat(2 * 1024 * 1024) },
+    { payload: "x".repeat(3 * 1024 * 1024) },
     "local",
   );
   assert.equal(oversized, false, "oversized snapshots report that they were not cached");
+
+  const largeView = { payload: "x".repeat(1.6 * 1024 * 1024) };
+  assert.equal(await cacheContext.self.AAP_CACHE.setView("acquisition", largeView, "org-acme"), true);
+  assert.equal(await cacheContext.self.AAP_CACHE.setView("debugging", largeView, "org-acme"), true);
+  assert.equal(
+    store["aap.view.acquisition:org-acme"],
+    undefined,
+    "the shared view budget evicts an older page snapshot before writing a newer one",
+  );
+
+  store.unrelatedExtensionData = "x".repeat(8 * 1024 * 1024);
+  assert.equal(
+    await cacheContext.self.AAP_CACHE.setView("quota", { rows: ["quota"] }, "org-acme"),
+    false,
+    "cache writes skip safely when unrelated extension data consumes the shared quota",
+  );
+  assert.equal(store["aap.view.quota:org-acme"], undefined);
+  delete store.unrelatedExtensionData;
+
+  failNextStorageWrite = true;
+  assert.equal(
+    await cacheContext.self.AAP_CACHE.setView("quota-race", { rows: ["quota-race"] }, "org-acme"),
+    false,
+    "a quota race during storage.set is treated as an optional cache miss",
+  );
 
   const removed = await cacheContext.self.AAP_CACHE.clearAll();
   assert.equal(removed, 2);
@@ -99,6 +131,7 @@ vm.runInNewContext(fs.readFileSync("lib/cache.js", "utf8"), cacheContext);
   };
   const oldCacheContext = {
     self: {},
+    TextEncoder,
     chrome: {
       storage: {
         local: oldStorage,
