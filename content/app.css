@@ -2079,11 +2079,103 @@
   font: inherit;
 }
 
-.aap-actor-detail-heading {
+.aap-actor-detail-accordion {
+  display: block;
+}
+
+.aap-actor-detail-accordion-summary {
+  display: grid;
+  min-height: 48px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 16px;
+  box-sizing: border-box;
+  margin: -2px;
+  padding: 2px;
+  border-radius: 8px;
+  cursor: pointer;
+  list-style: none;
+  touch-action: manipulation;
+  user-select: none;
+}
+
+.aap-actor-detail-accordion-summary::-webkit-details-marker {
+  display: none;
+}
+
+.aap-actor-detail-accordion-summary::marker {
+  display: none;
+  content: "";
+}
+
+.aap-actor-detail-accordion-summary:hover {
+  background: var(--aap-actor-surface-muted);
+}
+
+.aap-actor-detail-accordion-summary:active {
+  opacity: 0.88;
+}
+
+.aap-actor-detail-accordion-summary:focus-visible {
+  outline: 2px solid var(--aap-actor-accent);
+  outline-offset: 2px;
+}
+
+.aap-actor-detail-accordion-copy {
   display: flex;
+  min-width: 0;
   flex-direction: column;
   gap: 5px;
-  margin-bottom: 22px;
+}
+
+.aap-actor-detail-accordion-title {
+  overflow-wrap: anywhere;
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.aap-actor-detail-accordion-subtitle,
+.aap-actor-detail-chart-heading p {
+  color: var(--aap-actor-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.aap-actor-detail-accordion-subtitle {
+  overflow-wrap: anywhere;
+}
+
+.aap-actor-detail-accordion-toggle {
+  display: inline-flex;
+  width: 44px;
+  height: 44px;
+  box-sizing: border-box;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 44px;
+  margin-top: 2px;
+  border: 1px solid var(--aap-actor-border);
+  border-radius: 50%;
+  background: var(--aap-actor-surface-muted);
+}
+
+.aap-actor-detail-accordion-toggle::after {
+  width: 9px;
+  height: 9px;
+  border-right: 2px solid var(--aap-actor-text);
+  border-bottom: 2px solid var(--aap-actor-text);
+  content: "";
+  transform: translateY(-2px) rotate(45deg);
+  transition: transform 180ms ease;
+}
+
+.aap-actor-detail-accordion[open] .aap-actor-detail-accordion-toggle::after {
+  transform: translateY(2px) rotate(225deg);
+}
+
+.aap-actor-detail-accordion-body {
+  padding-top: 22px;
 }
 
 .aap-actor-detail-kicker {
@@ -2095,19 +2187,8 @@
   text-transform: uppercase;
 }
 
-.aap-actor-detail-heading h2 {
-  margin: 0;
-  font-size: 24px;
-  font-weight: 700;
-  line-height: 1.25;
-}
-
-.aap-actor-detail-heading p,
 .aap-actor-detail-chart-heading p {
   margin: 0;
-  color: var(--aap-actor-muted);
-  font-size: 13px;
-  line-height: 1.45;
 }
 
 .aap-actor-detail-summary {
@@ -2360,6 +2441,14 @@
     padding: 14px;
   }
 
+  .aap-actor-detail-accordion-summary {
+    gap: 10px;
+  }
+
+  .aap-actor-detail-accordion-title {
+    font-size: 22px;
+  }
+
   .aap-actor-detail-summary {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -2375,6 +2464,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .aap-actor-detail-accordion-toggle::after,
   .aap-actor-detail-chart-bar {
     transition: none;
   }
@@ -3189,7 +3279,312 @@
   }
 }
 
+/* ---- Shared motion polish ---------------------------------------------- */
+.aap-overlay-page,
+.aap-profile-sort-page,
+.aap-quality-overview-page,
+.aap-acquisition-overview-page,
+.aap-debugging-overview-page,
+.aap-actor-detail-page {
+  --aap-motion-fast: 140ms;
+  --aap-motion-base: 180ms;
+  --aap-motion-enter: 260ms;
+  --aap-motion-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --aap-motion-standard: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@keyframes aap-widget-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes aap-loading-pulse {
+  0%,
+  100% {
+    opacity: 0.68;
+  }
+
+  50% {
+    opacity: 0.48;
+  }
+}
+
+@keyframes aap-tooltip-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.aap-profile-sort-controls,
+.aap-quality-overview,
+.aap-acquisition-overview,
+.aap-debugging-overview,
+.aap-actor-detail-insights {
+  animation: aap-widget-enter var(--aap-motion-enter, 260ms) var(--aap-motion-ease) both;
+}
+
+:where(
+  .aap-metric-select,
+  .aap-tt-close,
+  .aap-tt-action,
+  .aap-view-button,
+  .aap-range-field select,
+  .aap-range-grouping select,
+  .aap-range-quick-button,
+  .aap-range-tooltip-close,
+  .aap-range-tooltip-action,
+  .aap-quality-controls input,
+  .aap-quality-controls select,
+  .aap-quality-order,
+  .aap-quality-refresh,
+  .aap-quality-more,
+  .aap-acquisition-controls input,
+  .aap-acquisition-controls select,
+  .aap-acquisition-order,
+  .aap-acquisition-refresh,
+  .aap-acquisition-more,
+  .aap-debugging-sort,
+  .aap-debugging-order,
+  .aap-debugging-refresh,
+  .aap-debugging-more,
+  .aap-insights-controls input,
+  .aap-insights-controls select,
+  .aap-insights-controls > button,
+  .aap-insights-view-button,
+  .aap-insights-nav-view-button,
+  .aap-profile-sort-select,
+  .aap-profile-sort-direction,
+  .aap-profile-sort-retry,
+  .aap-profile-filter-select,
+  .aap-profile-filter-operator,
+  .aap-profile-filter-input,
+  .aap-profile-filter-apply,
+  .aap-profile-filter-clear,
+  .aap-actor-detail-accordion-summary
+) {
+  transition:
+    color var(--aap-motion-fast, 140ms) var(--aap-motion-standard, ease),
+    border-color var(--aap-motion-fast, 140ms) var(--aap-motion-standard, ease),
+    background-color var(--aap-motion-fast, 140ms) var(--aap-motion-standard, ease),
+    box-shadow var(--aap-motion-base, 180ms) var(--aap-motion-standard, ease),
+    opacity var(--aap-motion-fast, 140ms) var(--aap-motion-standard, ease),
+    transform var(--aap-motion-base, 180ms) var(--aap-motion-ease, ease);
+}
+
+:where(
+  .aap-tt-close,
+  .aap-tt-action,
+  .aap-range-quick-button,
+  .aap-range-tooltip-close,
+  .aap-range-tooltip-action,
+  .aap-quality-order,
+  .aap-quality-refresh,
+  .aap-quality-more,
+  .aap-acquisition-order,
+  .aap-acquisition-refresh,
+  .aap-acquisition-more,
+  .aap-debugging-order,
+  .aap-debugging-refresh,
+  .aap-debugging-more,
+  .aap-insights-controls > button,
+  .aap-insights-view-button,
+  .aap-insights-nav-view-button,
+  .aap-profile-sort-direction,
+  .aap-profile-sort-retry,
+  .aap-profile-filter-apply,
+  .aap-profile-filter-clear
+):hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+:where(
+  .aap-tt-close,
+  .aap-tt-action,
+  .aap-range-quick-button,
+  .aap-range-tooltip-close,
+  .aap-range-tooltip-action,
+  .aap-quality-order,
+  .aap-quality-refresh,
+  .aap-quality-more,
+  .aap-acquisition-order,
+  .aap-acquisition-refresh,
+  .aap-acquisition-more,
+  .aap-debugging-order,
+  .aap-debugging-refresh,
+  .aap-debugging-more,
+  .aap-insights-controls > button,
+  .aap-insights-view-button,
+  .aap-insights-nav-view-button,
+  .aap-profile-sort-direction,
+  .aap-profile-sort-retry,
+  .aap-profile-filter-apply,
+  .aap-profile-filter-clear
+):active:not(:disabled) {
+  transform: translateY(0);
+  transition-duration: 90ms;
+}
+
+.aap-profile-sort-card {
+  transition:
+    border-color var(--aap-motion-fast, 140ms) var(--aap-motion-standard, ease),
+    background-color var(--aap-motion-fast, 140ms) var(--aap-motion-standard, ease),
+    box-shadow var(--aap-motion-base, 180ms) var(--aap-motion-standard, ease),
+    transform var(--aap-motion-base, 180ms) var(--aap-motion-ease, ease);
+}
+
+.aap-profile-sort-card:hover {
+  transform: translateY(-2px);
+}
+
+.aap-profile-sort-card:active {
+  transform: translateY(0);
+}
+
+:where(
+  .aap-quality-table tbody tr,
+  .aap-acquisition-table tbody tr,
+  .aap-debugging-table tbody tr,
+  .aap-debugging-runs-table tbody tr
+) {
+  transition: background-color var(--aap-motion-fast, 140ms) var(--aap-motion-standard, ease);
+}
+
+.aap-acquisition-row-loading,
+.aap-quality-row-loading,
+.aap-debugging-row-loading {
+  animation: aap-loading-pulse 1.4s ease-in-out infinite;
+}
+
+.aap-tooltip[style*="display: block"],
+.aap-range-tooltip[style*="display: block"],
+.aap-quality-tooltip[style*="display: block"],
+.aap-debugging-tooltip[style*="display: block"] {
+  animation: aap-tooltip-enter 160ms var(--aap-motion-standard, ease-out) both;
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .aap-profile-sort-controls,
+  .aap-quality-overview,
+  .aap-acquisition-overview,
+  .aap-debugging-overview,
+  .aap-actor-detail-insights,
+  .aap-acquisition-row-loading,
+  .aap-quality-row-loading,
+  .aap-debugging-row-loading,
+  .aap-tooltip,
+  .aap-range-tooltip,
+  .aap-quality-tooltip,
+  .aap-debugging-tooltip {
+    animation: none !important;
+  }
+
+  :where(
+    .aap-metric-select,
+    .aap-tt-close,
+    .aap-tt-action,
+    .aap-view-button,
+    .aap-range-field select,
+    .aap-range-grouping select,
+    .aap-range-quick-button,
+    .aap-range-tooltip-close,
+    .aap-range-tooltip-action,
+    .aap-quality-controls input,
+    .aap-quality-controls select,
+    .aap-quality-order,
+    .aap-quality-refresh,
+    .aap-quality-more,
+    .aap-acquisition-controls input,
+    .aap-acquisition-controls select,
+    .aap-acquisition-order,
+    .aap-acquisition-refresh,
+    .aap-acquisition-more,
+    .aap-debugging-sort,
+    .aap-debugging-order,
+    .aap-debugging-refresh,
+    .aap-debugging-more,
+    .aap-insights-controls input,
+    .aap-insights-controls select,
+    .aap-insights-controls > button,
+    .aap-insights-view-button,
+    .aap-insights-nav-view-button,
+    .aap-profile-sort-select,
+    .aap-profile-sort-direction,
+    .aap-profile-sort-retry,
+    .aap-profile-filter-select,
+    .aap-profile-filter-operator,
+    .aap-profile-filter-input,
+    .aap-profile-filter-apply,
+    .aap-profile-filter-clear,
+    .aap-profile-sort-card,
+    .aap-actor-detail-accordion-summary
+  ) {
+    transition: none;
+  }
+
+  .aap-profile-sort-card:hover,
+  .aap-profile-sort-card:active,
+  :where(
+    .aap-tt-close,
+    .aap-tt-action,
+    .aap-range-quick-button,
+    .aap-range-tooltip-close,
+    .aap-range-tooltip-action,
+    .aap-quality-order,
+    .aap-quality-refresh,
+    .aap-quality-more,
+    .aap-acquisition-order,
+    .aap-acquisition-refresh,
+    .aap-acquisition-more,
+    .aap-debugging-order,
+    .aap-debugging-refresh,
+    .aap-debugging-more,
+    .aap-insights-controls > button,
+    .aap-insights-view-button,
+    .aap-insights-nav-view-button,
+    .aap-profile-sort-direction,
+    .aap-profile-sort-retry,
+    .aap-profile-filter-apply,
+    .aap-profile-filter-clear
+  ):hover,
+  :where(
+    .aap-tt-close,
+    .aap-tt-action,
+    .aap-range-quick-button,
+    .aap-range-tooltip-close,
+    .aap-range-tooltip-action,
+    .aap-quality-order,
+    .aap-quality-refresh,
+    .aap-quality-more,
+    .aap-acquisition-order,
+    .aap-acquisition-refresh,
+    .aap-acquisition-more,
+    .aap-debugging-order,
+    .aap-debugging-refresh,
+    .aap-debugging-more,
+    .aap-insights-controls > button,
+    .aap-insights-view-button,
+    .aap-insights-nav-view-button,
+    .aap-profile-sort-direction,
+    .aap-profile-sort-retry,
+    .aap-profile-filter-apply,
+    .aap-profile-filter-clear
+  ):active {
+    transform: none;
+  }
+}
   .aap-profile-sort-card,
   .aap-profile-benchmark-tag {
     transition: none;

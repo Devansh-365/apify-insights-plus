@@ -2,6 +2,9 @@
 
 :root {
   color-scheme: dark;
+  --motion-fast: 140ms;
+  --motion-base: 180ms;
+  --motion-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
   --ink: #f8f2ff;
   --muted: #b9abc9;
   --faint: #8f7fa4;
@@ -65,6 +68,7 @@ body {
   color: var(--muted);
   background: transparent;
   cursor: pointer;
+  transition: color var(--motion-fast) var(--motion-ease), border-color var(--motion-fast) var(--motion-ease), background-color var(--motion-fast) var(--motion-ease), transform var(--motion-fast) var(--motion-ease);
 }
 
 .icon-button:hover,
@@ -88,6 +92,7 @@ body {
   font: inherit;
   font-size: 12px;
   cursor: pointer;
+  transition: color var(--motion-fast) var(--motion-ease), border-color var(--motion-fast) var(--motion-ease), background-color var(--motion-fast) var(--motion-ease), transform var(--motion-fast) var(--motion-ease);
 }
 
 .back-button:hover,
@@ -159,13 +164,24 @@ body {
   font-size: 12px;
   font-weight: 700;
   cursor: pointer;
+  transition: background-color var(--motion-fast) var(--motion-ease), box-shadow var(--motion-base) var(--motion-ease), transform var(--motion-fast) var(--motion-ease);
 }
 
 .row button:hover,
 .row button:focus-visible {
   background: var(--accent-hover);
+  box-shadow: 0 5px 14px rgba(245, 185, 66, 0.18);
   outline: 2px solid rgba(245, 185, 66, 0.3);
   outline-offset: 1px;
+}
+
+.row button:hover {
+  transform: translateY(-1px);
+}
+
+.row button:active {
+  transform: translateY(0);
+  transition-duration: 90ms;
 }
 
 .field {
@@ -209,6 +225,7 @@ body {
   font-size: 11px;
   cursor: pointer;
   text-decoration: underline;
+  transition: color var(--motion-fast) var(--motion-ease), opacity var(--motion-fast) var(--motion-ease);
 }
 
 .link-button:hover,
@@ -231,6 +248,7 @@ body {
   font-size: 12px;
   font-weight: 650;
   text-decoration: none;
+  transition: color var(--motion-fast) var(--motion-ease), opacity var(--motion-fast) var(--motion-ease);
 }
 
 #open-insights:hover,
@@ -238,4 +256,37 @@ body {
   color: #ecd7ff;
   text-decoration: underline;
   outline: none;
+}
+
+.card {
+  animation: popup-card-enter 220ms var(--motion-ease) both;
+}
+
+@keyframes popup-card-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card,
+  .icon-button,
+  .back-button,
+  .row button,
+  .link-button,
+  #open-insights {
+    animation: none;
+    transition: none;
+  }
+
+  .row button:hover,
+  .row button:active {
+    transform: none;
+  }
 }

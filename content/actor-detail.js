@@ -33,6 +33,7 @@
     loadedAt: 0,
     retryAt: 0,
     requestId: 0,
+    accordionOpen: true,
   };
 
   let host = null;
@@ -80,29 +81,49 @@
     });
   }
 
-  function renderHeading(subtitle) {
-    const heading = createElement("div", "aap-actor-detail-heading");
-    heading.append(
+  function renderAccordion(subtitle, content) {
+    const accordion = createElement("details", "aap-actor-detail-accordion");
+    const summary = createElement("summary", "aap-actor-detail-accordion-summary");
+    const copy = createElement("span", "aap-actor-detail-accordion-copy");
+    const title = createElement("span", "aap-actor-detail-accordion-title", "Actor insights");
+    const description = createElement("span", "aap-actor-detail-accordion-subtitle", subtitle);
+    const toggle = createElement("span", "aap-actor-detail-accordion-toggle");
+    const contentId = "aap-actor-detail-accordion-content";
+    const body = createElement("div", "aap-actor-detail-accordion-body");
+
+    copy.append(
       createElement("span", "aap-actor-detail-kicker", "Public activity"),
-      createElement("h2", null, "Actor insights"),
-      createElement("p", null, subtitle),
+      title,
+      description,
     );
-    return heading;
+    toggle.setAttribute("aria-hidden", "true");
+    body.id = contentId;
+    body.appendChild(content);
+    summary.append(copy, toggle);
+    summary.setAttribute("aria-controls", contentId);
+    summary.setAttribute("aria-expanded", String(state.accordionOpen));
+    accordion.append(summary, body);
+    accordion.addEventListener("toggle", () => {
+      state.accordionOpen = accordion.open;
+      summary.setAttribute("aria-expanded", String(accordion.open));
+    });
+    accordion.open = state.accordionOpen;
+    return accordion;
   }
 
   function renderLoading() {
-    host.replaceChildren(
-      renderHeading("Loading the latest public activity snapshot…"),
+    host.replaceChildren(renderAccordion(
+      "Loading the latest public activity snapshot…",
       createElement("div", "aap-actor-detail-loading", "Loading public Actor statistics…"),
-    );
+    ));
     host.setAttribute("aria-busy", "true");
   }
 
   function renderError() {
-    host.replaceChildren(
-      renderHeading("Public activity snapshot"),
+    host.replaceChildren(renderAccordion(
+      "Public activity snapshot",
       createElement("div", "aap-actor-detail-error", state.error || "Actor statistics could not be loaded."),
-    );
+    ));
     host.removeAttribute("aria-busy");
   }
 
@@ -297,8 +318,12 @@
       return;
     }
 
-    const heading = renderHeading("Public activity snapshot from the last 30 days");
-    host.replaceChildren(heading, renderSummary(state.data), renderRunChart(state.data));
+    const content = document.createDocumentFragment();
+    content.append(renderSummary(state.data), renderRunChart(state.data));
+    host.replaceChildren(renderAccordion(
+      "Public activity snapshot from the last 30 days",
+      content,
+    ));
     host.removeAttribute("aria-busy");
   }
 
@@ -323,6 +348,7 @@
       state.error = null;
       state.loadedAt = 0;
       state.retryAt = 0;
+      state.accordionOpen = true;
       load(route);
     } else if (!state.loading
       && (!state.data || Date.now() - state.loadedAt > REFRESH_TTL_MS)
@@ -367,6 +393,7 @@
     state.error = null;
     state.loadedAt = 0;
     state.retryAt = 0;
+    state.accordionOpen = true;
     host?.remove();
     host = null;
     document.documentElement.classList.remove(PAGE_CLASS);
