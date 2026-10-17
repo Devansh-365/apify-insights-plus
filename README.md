@@ -10,7 +10,7 @@ This Chrome extension adds extra views to the [Apify Console Insights](https://c
 - **Debugging:** See the success rate for all Actors. Select an Actor to see its User runs.
 - **Public Actor pages:** See Active Users last 30 days, Runs last 30 days, Total/Lifetime runs, Created At, Pricing Updated, Last Run, and the public run-status chart on each public Actor detail page. If Apify exposes day-wise run data in a future response, the chart can render those daily bars; the current public API only publishes 30-day status totals.
 - **Public profiles:** Sort Actor cards by Runs, monthly runs, MAUs, Users, Bookmarks, or newest-created date, and filter them with numeric thresholds such as “MAUs at least 10” or “Runs more than 1,000.” Public profile Actor Stats also show account-wide total runs and monthly runs (last 30 days), loaded in the background from the same cached catalog without delaying the initial profile render.
-- **Cache:** Historical API responses are kept for 15 minutes. Current-month API responses are kept for 5 minutes, public Actor snapshots for 15 minutes, and the per-Actor Monetization breakdown for 15 minutes. Use **Clear cache** in the popup to remove it.
+- **Cache:** Historical API responses are kept for 15 minutes. Current-month API responses are kept for 5 minutes, normalized public profile catalogs and target summaries for 15 minutes, local Builder Benchmark snapshots for 24 hours, and the per-Actor Monetization breakdown for 15 minutes. Use **Clear cache** in the popup to remove it.
 
 ## Install manually from GitHub
 

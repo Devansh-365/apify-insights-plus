@@ -5,6 +5,7 @@
   const PROFILE_STATS_HOST_CLASS = "aap-profile-extra-metrics";
   const PAGE_CLASS = "aap-profile-sort-page";
   const PAGE_SIZE = 1000;
+  const CATALOG_CACHE_NAME = "profile-catalog";
   const CATALOG_TTL_MS = 15 * 60 * 1000;
   const RANK_METRIC_KEYS = AAP_PROFILE_SORT.RANK_METRIC_KEYS || ["totalUsers", "monthlyUsers", "totalRuns", "monthlyRuns"];
   const NATIVE_METRIC_LABELS = {
@@ -650,15 +651,32 @@
     appendRenderChunk(items, root, token);
   }
 
+  function catalogCacheScope(routeKey, catalogSortKey) {
+    return `profile:${routeKey}:${catalogSortKey}`;
+  }
+
   async function fetchCatalog(route, catalogSortKey = "default", priority = "background", force = false, onProgress) {
     const normalizedSortKey = catalogSortKey === "newest" ? "newest" : "default";
     const cacheKey = `${route.key}:${normalizedSortKey}`;
+    const cacheScope = catalogCacheScope(route.key, normalizedSortKey);
     const cached = catalogCache.get(cacheKey);
     if (!force && cached && Date.now() - cached.loadedAt < CATALOG_TTL_MS) return cached.actors;
     const existing = catalogFetches.get(cacheKey);
     if (existing) return existing;
 
     const operation = (async () => {
+      if (!force) {
+        try {
+          const persisted = await AAP_CACHE.getView(CATALOG_CACHE_NAME, CATALOG_TTL_MS, cacheScope);
+          const actors = persisted.hit && Array.isArray(persisted.data?.actors) ? persisted.data.actors : null;
+          if (actors) {
+            catalogCache.set(cacheKey, { actors, loadedAt: persisted.updatedAt || Date.now() });
+            return actors;
+          }
+        } catch {
+          // A view-cache failure should fall through to the live catalog.
+        }
+      }
       const actors = [];
       let offset = 0;
       let total = null;
@@ -677,6 +695,10 @@
         offset += page.length;
       } while (offset < total);
       catalogCache.set(cacheKey, { actors, loadedAt: Date.now() });
+      // The normalized catalog is much smaller than the raw Store response,
+      // so it remains reusable even when the raw response exceeds the API
+      // cache's per-entry limit.
+      AAP_CACHE.setView(CATALOG_CACHE_NAME, { actors }, cacheScope).catch(() => {});
       return actors;
     })();
     catalogFetches.set(cacheKey, operation);

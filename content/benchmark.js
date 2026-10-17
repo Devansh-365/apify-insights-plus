@@ -3,6 +3,8 @@
   const TAG_SLOT_SELECTOR = "[data-aap-profile-benchmark-tag]";
   const SNAPSHOT_NAME = "builder-benchmark";
   const SNAPSHOT_SCOPE = "local";
+  const TARGET_NAME = "builder-benchmark-target";
+  const TARGET_TTL_MS = 15 * 60 * 1000;
   const SNAPSHOT_TTL_MS = AAP_BENCHMARK.SNAPSHOT_TTL_MS || 24 * 60 * 60 * 1000;
   const PAGE_SIZE = 1000;
   const SCAN_PAGE_INTERVAL_MS = 1_100;
@@ -97,7 +99,9 @@
         ? "scanning"
         : state.targetBuilderStatus === "unavailable"
           ? "unavailable"
-          : state.scanStatus;
+          : state.snapshot
+            ? "complete"
+            : state.scanStatus;
       const model = AAP_BENCHMARK.buildTagModel({
         status: targetStatus,
         metricKey,
@@ -117,11 +121,43 @@
     }
   }
 
-  async function loadTargetBuilder(routeKey, username) {
+  function targetCacheScope(routeKey) {
+    return `profile:${routeKey}`;
+  }
+
+  function findTargetBuilder(value, routeKey) {
+    if (!value || typeof value !== "object") return null;
+    return AAP_BENCHMARK.findBuilder([value], routeKey);
+  }
+
+  function setTargetBuilder(routeKey, target) {
+    if (state.routeKey !== routeKey || !target) return false;
+    state.targetBuilder = target;
+    state.targetBuilderStatus = "complete";
+    return true;
+  }
+
+  async function loadTargetBuilder(routeKey, username, snapshotPromise) {
     if (state.targetBuilderPromise) return state.targetBuilderPromise;
     state.targetBuilderStatus = "loading";
     const operation = (async () => {
       try {
+        // A fresh snapshot already contains the builder aggregate needed to
+        // calculate every tag. Waiting for the snapshot read avoids fetching
+        // the much larger profile Actor catalog on every profile visit.
+        if (snapshotPromise) await snapshotPromise;
+        if (state.routeKey !== routeKey) return;
+        const snapshotTarget = AAP_BENCHMARK.findBuilder(state.snapshot?.builders, routeKey);
+        if (setTargetBuilder(routeKey, snapshotTarget)) return;
+
+        // A profile can be visited before the first benchmark scan finishes,
+        // or it can be outside the locally observed Store cohort. Keep the
+        // small aggregate durable so this fallback is also reusable.
+        const cached = await AAP_CACHE.getView(TARGET_NAME, TARGET_TTL_MS, targetCacheScope(routeKey));
+        const cachedTarget = cached.hit ? findTargetBuilder(cached.data, routeKey) : null;
+        if (setTargetBuilder(routeKey, cachedTarget)) return;
+        if (state.routeKey !== routeKey) return;
+
         const response = await AAP_API.publicActorStore(username, {
           limit: PAGE_SIZE,
           offset: 0,
@@ -132,9 +168,9 @@
         const actors = AAP_PROFILE_SORT.normalizeStoreResponse(response);
         const target = AAP_BENCHMARK.aggregateActors(actors).builders.find((builder) => builder.key === routeKey);
         if (!target) throw new Error("The profile Actor data did not include this builder.");
-        if (state.routeKey !== routeKey) return;
-        state.targetBuilder = target;
-        state.targetBuilderStatus = "complete";
+        setTargetBuilder(routeKey, target);
+        // Do not block the visible rank tag on this small persistence write.
+        AAP_CACHE.setView(TARGET_NAME, target, targetCacheScope(routeKey)).catch(() => {});
       } catch (error) {
         if (state.routeKey !== routeKey) return;
         state.targetBuilderStatus = "unavailable";
@@ -320,8 +356,8 @@
     state.scanError = null;
     state.slots = new Map();
     render();
-    loadSnapshot(route.key);
-    loadTargetBuilder(route.key, route.username);
+    const snapshotPromise = loadSnapshot(route.key);
+    loadTargetBuilder(route.key, route.username, snapshotPromise);
   }
 
   function ensureRoute(route) {
