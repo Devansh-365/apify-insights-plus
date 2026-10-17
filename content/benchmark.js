@@ -137,6 +137,10 @@
     return true;
   }
 
+  function setSnapshotTarget(routeKey, snapshot = state.snapshot) {
+    return setTargetBuilder(routeKey, AAP_BENCHMARK.findBuilder(snapshot?.builders, routeKey));
+  }
+
   async function loadTargetBuilder(routeKey, username, snapshotPromise) {
     if (state.targetBuilderPromise) return state.targetBuilderPromise;
     state.targetBuilderStatus = "loading";
@@ -147,8 +151,17 @@
         // the much larger profile Actor catalog on every profile visit.
         if (snapshotPromise) await snapshotPromise;
         if (state.routeKey !== routeKey) return;
-        const snapshotTarget = AAP_BENCHMARK.findBuilder(state.snapshot?.builders, routeKey);
-        if (setTargetBuilder(routeKey, snapshotTarget)) return;
+        if (setSnapshotTarget(routeKey)) return;
+
+        // A first scan starts after the snapshot read finishes. Wait for it
+        // before using the profile fallback so the first visit and later
+        // visits rank the builder against the exact same cohort and metrics.
+        const scan = activeScan;
+        if (scan) {
+          await scan;
+          if (state.routeKey !== routeKey) return;
+          if (setSnapshotTarget(routeKey)) return;
+        }
 
         // A profile can be visited before the first benchmark scan finishes,
         // or it can be outside the locally observed Store cohort. Keep the
@@ -344,6 +357,7 @@
           state.snapshot = snapshot;
           state.snapshotStale = false;
         }
+        if (state.routeKey && state.snapshot === snapshot) setSnapshotTarget(state.routeKey, snapshot);
         state.scanStatus = "complete";
         state.scanError = null;
         render();
