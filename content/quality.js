@@ -570,10 +570,34 @@
     };
   }
 
+  function skeletonCell(className, width) {
+    const cell = createElement("td", className);
+    const value = createElement("span", "aap-skeleton aap-skeleton-strong");
+    value.style.setProperty("--aap-skeleton-width", `${width}px`);
+    const detail = createElement("span", "aap-skeleton");
+    detail.style.setProperty("--aap-skeleton-width", `${Math.round(width * 0.7)}px`);
+    cell.append(value, detail);
+    return cell;
+  }
+
   function tableRow(row, total) {
     const tableRow = document.createElement("tr");
-    if (row.loading) tableRow.className = "aap-quality-row-loading";
-    else if (row.failed) tableRow.className = "aap-quality-row-partial";
+    if (row.loading && !total) {
+      tableRow.className = "aap-quality-row-loading";
+      tableRow.setAttribute("aria-busy", "true");
+      tableRow.append(
+        actorCell(row.actor, false),
+        skeletonCell("aap-quality-score", 44),
+        skeletonCell("aap-quality-setup", 110),
+        skeletonCell("aap-quality-insights", 96),
+        skeletonCell("aap-quality-insights aap-quality-improvements", 96),
+        skeletonCell("aap-quality-metric", 40),
+        skeletonCell("aap-quality-metric", 40),
+        skeletonCell("aap-quality-metric", 44),
+      );
+      return tableRow;
+    }
+    if (row.failed) tableRow.className = "aap-quality-row-partial";
     tableRow.append(
       actorCell(row.actor, total),
       qualityCell(row),
@@ -589,20 +613,17 @@
 
   function loadingTotalRow() {
     const tableRow = document.createElement("tr");
-    const loadingCell = (className, label) => {
-      const cell = createElement("td", className);
-      cell.append(createElement("strong", null, "–"), createElement("small", null, label));
-      return cell;
-    };
+    tableRow.className = "aap-quality-row-loading";
+    tableRow.setAttribute("aria-busy", "true");
     tableRow.append(
       actorCell({ title: "All actors", name: "Account total" }, true),
-      loadingCell("aap-quality-score", "Quality"),
-      loadingCell("aap-quality-setup", "Setup"),
-      loadingCell("aap-quality-insights", "Highlights"),
-      loadingCell("aap-quality-insights aap-quality-improvements", "Suggestions"),
-      loadingCell("aap-quality-metric", "last 30 days"),
-      loadingCell("aap-quality-metric", "Users"),
-      loadingCell("aap-quality-metric", "run success"),
+      skeletonCell("aap-quality-score", 44),
+      skeletonCell("aap-quality-setup", 72),
+      skeletonCell("aap-quality-insights", 40),
+      skeletonCell("aap-quality-insights aap-quality-improvements", 40),
+      skeletonCell("aap-quality-metric", 40),
+      skeletonCell("aap-quality-metric", 40),
+      skeletonCell("aap-quality-metric", 44),
     );
     return tableRow;
   }
@@ -743,9 +764,9 @@
 
     const status = createElement("div", "aap-quality-status");
     function tableShell(label, bodyKey) {
-      const section = createElement("section", "aap-quality-table-section");
+      const section = createElement("section", `aap-quality-table-section aap-table-section ${bodyKey === "totalBody" ? "aap-table-section-total" : "aap-table-section-rows"}`);
       section.setAttribute("aria-label", label);
-      const shell = createElement("div", "aap-quality-table-shell");
+      const shell = createElement("div", "aap-quality-table-shell aap-table-shell");
       const scroll = createElement("div", "aap-quality-table-scroll");
       const table = document.createElement("table");
       table.className = "aap-quality-table";

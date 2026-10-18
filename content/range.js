@@ -691,7 +691,9 @@
         }
       }
       restoreOriginalText(wrapper);
+      removeInsights(wrapper);
     }
+    window.AAP_PORTFOLIO?.remove();
     hideRangeTooltip();
     syncSelector();
   }
@@ -897,6 +899,256 @@
     }
   }
 
+  // ---- Chart insights ----------------------------------------------------
+  // Each chart gets a strip of decision-oriented figures (replacing Apify's
+  // average/min/max row) plus a one-line takeaway. Averages, extremes, and
+  // trends use complete periods only: today's in-progress bucket always looks
+  // like the worst day and would skew every comparison.
+  const TREND_WINDOWS = { day: 7, week: 4, month: 3 };
+
+  function todayIso() {
+    return new Date().toISOString().slice(0, 10);
+  }
+
+  function isPartialPeriod(period, grouping = state.grouping) {
+    const end = new Date(`${period}T00:00:00Z`);
+    if (Number.isNaN(end.getTime())) return false;
+    if (grouping === "week") end.setUTCDate(end.getUTCDate() + 7);
+    else if (grouping === "month") end.setUTCMonth(end.getUTCMonth() + 1);
+    else end.setUTCDate(end.getUTCDate() + 1);
+    return end.toISOString().slice(0, 10) > todayIso();
+  }
+
+  function completePeriods(data) {
+    return data.days.filter((period) => !isPartialPeriod(period, data.grouping));
+  }
+
+  function shortPeriodLabel(period, grouping = state.grouping) {
+    if (grouping === "month") return AAPR.formatDate(period, { month: "short", year: "numeric" });
+    const day = AAPR.formatDate(period, { month: "short", day: "numeric" });
+    return grouping === "week" ? `wk of ${day}` : day;
+  }
+
+  function average(values) {
+    return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
+  }
+
+  // Compares the latest N complete periods with the N before them.
+  function windowTrend(values, grouping = state.grouping) {
+    const cap = TREND_WINDOWS[grouping] || 7;
+    const size = Math.min(cap, Math.floor(values.length / 2));
+    if (size < (grouping === "day" ? 3 : 2)) return null;
+    const recent = average(values.slice(-size));
+    const prior = average(values.slice(-size * 2, -size));
+    if (!prior) return null;
+    return { change: (recent - prior) / prior, size, unit: groupingLabel(grouping) };
+  }
+
+  function extremes(periods, valueOf) {
+    let min = null;
+    let max = null;
+    for (const period of periods) {
+      const value = valueOf(period);
+      if (value == null || !Number.isFinite(value)) continue;
+      if (!min || value < min.value) min = { period, value };
+      if (!max || value > max.value) max = { period, value };
+    }
+    return { min, max };
+  }
+
+  function formatWhole(value) {
+    return value == null ? "–" : Math.round(value).toLocaleString("en-US");
+  }
+
+  function formatCostPerThousand(value) {
+    if (value == null) return "–";
+    // Decide precision on the rounded value so 0.0998 shows as $0.10, not $0.100.
+    return `$${value.toFixed(value >= 0.095 ? 2 : 3)}`;
+  }
+
+  function formatPercent(value, digits = 1) {
+    return value == null ? "–" : `${(value * 100).toFixed(digits)}%`;
+  }
+
+  // Trend detail with an arrow and sign so direction never relies on color.
+  function trendDetail(trend, higherIsBetter) {
+    if (!trend) return { text: "Not enough complete periods for a trend", tone: "neutral" };
+    const percent = Math.abs(trend.change * 100);
+    const flat = percent < 2;
+    const arrow = flat ? "→" : trend.change > 0 ? "↑" : "↓";
+    const sign = flat ? "" : trend.change > 0 ? "+" : "−";
+    const good = trend.change > 0 === higherIsBetter;
+    return {
+      text: `${arrow} ${sign}${percent.toFixed(percent >= 10 ? 0 : 1)}% vs prior ${trend.size} ${trend.unit}s`,
+      tone: flat ? "neutral" : good ? "good" : "bad",
+    };
+  }
+
+  function chartInsights(definition, data) {
+    const grouping = data.grouping || state.grouping;
+    const unit = groupingLabel(grouping);
+    const complete = completePeriods(data);
+    const row = (period) => data.daily[period] || {};
+    const partialNote = complete.length < data.days.length ? "Today is excluded until it ends." : "";
+
+    if (definition.key === "cost") {
+      const weighted = (periods) => {
+        let cost = 0;
+        let results = 0;
+        for (const period of periods) {
+          const { costPerThousandResults: value, results: count } = row(period);
+          if (value == null || !count) continue;
+          cost += value * count;
+          results += count;
+        }
+        return results ? cost / results : null;
+      };
+      const avgCost = weighted(complete);
+      const revenue = complete.reduce((sum, period) => sum + (Number(row(period).revenue) || 0), 0);
+      const results = complete.reduce((sum, period) => sum + (Number(row(period).results) || 0), 0);
+      const yieldPerThousand = results ? (revenue / results) * 1000 : null;
+      const values = complete.map((period) => row(period).costPerThousandResults).filter((value) => value != null);
+      const trend = trendDetail(windowTrend(values, grouping), false);
+      const { min, max } = extremes(complete, (period) => row(period).costPerThousandResults);
+      const multiple = avgCost && yieldPerThousand ? yieldPerThousand / avgCost : null;
+      const tiles = [
+        { label: "Avg cost / 1K results", value: formatCostPerThousand(avgCost), detail: trend.text, tone: trend.tone, title: "Weighted by results, so busy days count more than quiet ones." },
+        { label: "Revenue / 1K results", value: formatCostPerThousand(yieldPerThousand), detail: multiple ? `${multiple.toFixed(multiple >= 10 ? 0 : 1)}× the cost to produce` : "No revenue in this range", tone: "neutral", title: "Total revenue divided by all results (paying and free users)." },
+        { label: `Cheapest ${unit}`, value: formatCostPerThousand(min?.value), detail: min ? shortPeriodLabel(min.period, grouping) : "–", tone: "neutral" },
+        { label: `Costliest ${unit}`, value: formatCostPerThousand(max?.value), detail: max ? shortPeriodLabel(max.period, grouping) : "–", tone: max && avgCost && max.value > avgCost * 1.5 ? "warning" : "neutral" },
+      ];
+      let takeaway = "Cost per 1,000 results is stable.";
+      if (trend.tone === "good") takeaway = "Cost per 1,000 results is falling, so each result is getting cheaper to produce.";
+      else if (trend.tone === "bad") takeaway = `Cost per 1,000 results is rising. Check the costliest ${unit} for expensive runs.`;
+      return { tiles, takeaway, note: partialNote, average: avgCost };
+    }
+
+    if (definition.key === "results") {
+      const values = complete.map((period) => Number(row(period).results) || 0);
+      const total = data.days.reduce((sum, period) => sum + (Number(row(period).results) || 0), 0);
+      const avg = average(values);
+      const trend = trendDetail(windowTrend(values, grouping), true);
+      const { max } = extremes(complete, (period) => Number(row(period).results) || 0);
+      const tiles = [
+        { label: "Total results", value: formatWhole(total), detail: `${data.days.length} ${unit}${data.days.length === 1 ? "" : "s"} in range`, tone: "neutral" },
+        { label: `Avg / ${unit}`, value: formatWhole(avg), detail: trend.text, tone: trend.tone },
+        { label: `Best ${unit}`, value: formatWhole(max?.value), detail: max ? `${shortPeriodLabel(max.period, grouping)}${avg ? ` · ${(max.value / avg).toFixed(1)}× avg` : ""}` : "–", tone: "neutral" },
+      ];
+      let takeaway = "Result volume is steady.";
+      if (trend.tone === "good") takeaway = "Result volume is growing.";
+      else if (trend.tone === "bad") takeaway = "Result volume is declining. Compare with runs to see whether usage or output per run dropped.";
+      return { tiles, takeaway, note: partialNote, average: avg };
+    }
+
+    if (definition.key === "runs") {
+      const totals = data.days.reduce((sum, period) => {
+        const current = row(period);
+        sum.runs += Number(current.runs) || 0;
+        sum.succeeded += Number(current.succeeded) || 0;
+        return sum;
+      }, { runs: 0, succeeded: 0 });
+      const values = complete.map((period) => Number(row(period).runs) || 0);
+      const avg = average(values);
+      const successRate = totals.runs ? totals.succeeded / totals.runs : null;
+      const notSucceeded = totals.runs - totals.succeeded;
+      const trend = trendDetail(windowTrend(values, grouping), true);
+      const { max } = extremes(complete, (period) => Number(row(period).runs) || 0);
+      const spike = max && avg ? max.value / avg : null;
+      const tiles = [
+        { label: "Total runs", value: formatWhole(totals.runs), detail: `${formatWhole(avg)} avg / ${unit} · ${trend.text}`, tone: trend.tone },
+        { label: "Success rate", value: formatPercent(successRate), detail: `${formatWhole(notSucceeded)} failed, aborted, or timed out`, tone: successRate == null ? "neutral" : successRate >= 0.98 ? "good" : successRate < 0.95 ? "bad" : "warning" },
+        { label: `Peak ${unit}`, value: formatWhole(max?.value), detail: max ? `${shortPeriodLabel(max.period, grouping)}${spike ? ` · ${spike.toFixed(1)}× avg` : ""}` : "–", tone: spike && spike >= 2.5 ? "warning" : "neutral" },
+      ];
+      let takeaway = "Run volume and reliability look healthy.";
+      if (successRate != null && successRate < 0.95) takeaway = `${formatPercent(1 - successRate)} of runs did not succeed. Open Debugging to find the failing Actors.`;
+      else if (spike && spike >= 2.5) takeaway = `Runs spiked to ${spike.toFixed(1)}× the average on ${shortPeriodLabel(max.period, grouping)}. Pin that ${unit} on the revenue chart to see which Actors drove it.`;
+      else if (trend.tone === "bad") takeaway = "Run volume is declining.";
+      return { tiles, takeaway, note: partialNote, average: avg, spike: spike && spike >= 2.5 ? max : null };
+    }
+
+    if (definition.key === "users") {
+      const paying = complete.map((period) => Number(row(period).payingUsers) || 0);
+      const free = complete.map((period) => Number(row(period).freeUsers) || 0);
+      const avgPaying = average(paying);
+      const avgFree = average(free);
+      const share = avgPaying != null && avgPaying + avgFree ? avgPaying / (avgPaying + avgFree) : null;
+      const payingTrend = trendDetail(windowTrend(paying, grouping), true);
+      const freeTrend = trendDetail(windowTrend(free, grouping), true);
+      const tiles = [
+        { label: "Paying users / day", value: formatWhole(avgPaying), detail: payingTrend.text, tone: payingTrend.tone },
+        { label: "Free users / day", value: formatWhole(avgFree), detail: freeTrend.text, tone: "neutral" },
+        { label: "Paying share", value: formatPercent(share, 0), detail: "of daily active users", tone: "neutral", title: "Average paying users divided by average paying plus free users." },
+      ];
+      let takeaway = "The paying and free user mix is stable.";
+      if (payingTrend.tone === "good") takeaway = "Paying users are growing.";
+      else if (payingTrend.tone === "bad") takeaway = "Paying users are declining. Watch for churn on your top revenue Actors.";
+      else if (freeTrend.tone === "good" && share != null && share < 0.3) takeaway = "Free usage is growing faster than paid usage, which is an opportunity to improve conversion.";
+      return { tiles, takeaway, note: partialNote, average: null };
+    }
+    return null;
+  }
+
+  function nativeSummaryRow(wrapper) {
+    const panels = [...wrapper.querySelectorAll('[class*="SummaryPanel-content"]')];
+    if (!panels.length) return null;
+    let row = panels[0];
+    while (row.parentElement && row.parentElement !== wrapper && !panels.every((panel) => row.contains(panel))) {
+      row = row.parentElement;
+    }
+    return panels.every((panel) => row.contains(panel)) && !row.querySelector("canvas") ? row : null;
+  }
+
+  function updateInsights(wrapper, definition, data) {
+    const insights = definition.key === "money" ? null : chartInsights(definition, data);
+    let strip = wrapper.querySelector(":scope > .aap-range-insights, .aap-range-insights");
+    if (!insights) {
+      strip?.remove();
+      return;
+    }
+    const nativeRow = nativeSummaryRow(wrapper);
+    if (nativeRow) {
+      rememberStyle(nativeRow, "display");
+      nativeRow.style.display = "none";
+      nativeRow.dataset.aapRangeHiddenSummary = "true";
+    }
+    if (!strip) {
+      strip = createElement("div", "aap-range-insights");
+      strip.setAttribute("role", "group");
+      strip.setAttribute("aria-label", `${definition.heading} insights`);
+    }
+    if (!strip.isConnected) {
+      if (nativeRow?.parentElement) nativeRow.parentElement.insertBefore(strip, nativeRow);
+      else wrapper.prepend(strip);
+    }
+    if (strip.__aapData === data) return;
+    strip.__aapData = data;
+    const grid = createElement("div", "aap-range-insights-grid");
+    for (const tile of insights.tiles) {
+      const item = createElement("div", `aap-range-insight aap-range-insight-${tile.tone || "neutral"}`);
+      if (tile.title) item.title = tile.title;
+      item.append(
+        createElement("span", "aap-range-insight-label", tile.label),
+        createElement("strong", "aap-range-insight-value", tile.value),
+        createElement("span", "aap-range-insight-detail", tile.detail),
+      );
+      grid.appendChild(item);
+    }
+    const takeaway = createElement("p", "aap-range-insight-takeaway", insights.takeaway);
+    if (insights.note) takeaway.appendChild(createElement("span", "aap-range-insight-note", ` ${insights.note}`));
+    takeaway.title = insights.note ? `${insights.takeaway} ${insights.note}` : insights.takeaway;
+    strip.replaceChildren(grid, takeaway);
+  }
+
+  function removeInsights(wrapper) {
+    wrapper.querySelectorAll(".aap-range-insights").forEach((element) => element.remove());
+    wrapper.querySelectorAll("[data-aap-range-hidden-summary]").forEach((element) => {
+      const key = "aapRangePreviousDisplay";
+      element.style.display = element.dataset[key] || "";
+      delete element.dataset[key];
+      delete element.dataset.aapRangeHiddenSummary;
+    });
+  }
+
   function drawRangeChart(chart, definition, data) {
     const { canvas, legend, host } = chart;
     // Keep the last successful chart visible while refreshing its data. The
@@ -923,7 +1175,7 @@
     const gridColor = chartStyles.getPropertyValue("--aap-range-chart-grid").trim() || "rgba(17,24,39,0.14)";
 
     const series = rangeSeries(definition, data || { days: [] });
-    const showLegend = definition.key !== "money";
+    const showLegend = definition.key !== "money" && series.length > 1;
     legend.style.display = showLegend ? "" : "none";
     if (showLegend) updateLegend(legend, series);
     else legend.replaceChildren();
@@ -936,6 +1188,7 @@
     }
 
     const values = chartValues(series, data);
+    const partial = data.days.map((period) => isPartialPeriod(period, data.grouping));
     const stackedBars = (definition.key === "money" || definition.key === "runs")
       && series.length > 1
       && series.every((item) => item.type === "bar");
@@ -1000,6 +1253,7 @@
         const x = left + index * slot + slot / 2;
         const barWidth = Math.max(3, slot * 0.62);
         let offset = 0;
+        ctx.globalAlpha = partial[index] ? 0.4 : 1;
         for (const segment of segments) {
           const height = (segment.value / maxValue) * plotHeight;
           const y = top + plotHeight - offset - height;
@@ -1010,6 +1264,7 @@
         // Keep the bar's baseline deterministic for zero-revenue periods.
         if (!drawnTotal) ctx.fillRect(x - barWidth / 2, top + plotHeight, barWidth, 0);
       }
+      ctx.globalAlpha = 1;
     } else {
       for (let seriesIndex = 0; seriesIndex < series.length; seriesIndex++) {
         const current = series[seriesIndex];
@@ -1026,23 +1281,87 @@
               : 0;
             const height = (value / maxValue) * plotHeight;
             const y = top + plotHeight - ((below + value) / maxValue) * plotHeight;
+            ctx.globalAlpha = partial[index] ? 0.4 : 1;
             ctx.fillRect(points[index].x - Math.max(3, slot * 0.62) / 2, y, Math.max(3, slot * 0.62), height);
           }
+          ctx.globalAlpha = 1;
         } else {
           ctx.strokeStyle = current.color;
           ctx.fillStyle = current.color;
           ctx.lineWidth = 2;
+          // Solid line through complete periods; the in-progress period is
+          // dashed so a partial day is not read as a drop.
+          const solidEnd = partial.lastIndexOf(false);
           ctx.beginPath();
-          points.forEach((point, index) => index ? ctx.lineTo(point.x, point.y) : ctx.moveTo(point.x, point.y));
+          points.slice(0, solidEnd + 1).forEach((point, index) => index ? ctx.lineTo(point.x, point.y) : ctx.moveTo(point.x, point.y));
           ctx.stroke();
+          if (solidEnd >= 0 && solidEnd < points.length - 1) {
+            ctx.save();
+            ctx.setLineDash([4, 4]);
+            ctx.globalAlpha = 0.6;
+            ctx.beginPath();
+            ctx.moveTo(points[solidEnd].x, points[solidEnd].y);
+            points.slice(solidEnd + 1).forEach((point) => ctx.lineTo(point.x, point.y));
+            ctx.stroke();
+            ctx.restore();
+          }
           if (points.length <= 90) {
-            for (const point of points) {
+            points.forEach((point, index) => {
               ctx.beginPath();
               ctx.arc(point.x, point.y, 2.5, 0, Math.PI * 2);
-              ctx.fill();
-            }
+              if (partial[index]) {
+                ctx.save();
+                ctx.lineWidth = 1.5;
+                ctx.stroke();
+                ctx.restore();
+              } else {
+                ctx.fill();
+              }
+            });
           }
         }
+      }
+    }
+    const insights = definition.key === "money" ? null : chartInsights(definition, data);
+    if (insights?.average != null && insights.average > 0 && insights.average <= maxValue) {
+      const y = top + plotHeight * (1 - insights.average / maxValue);
+      ctx.save();
+      ctx.strokeStyle = axisColor;
+      ctx.globalAlpha = 0.7;
+      ctx.setLineDash([5, 4]);
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(left, y);
+      ctx.lineTo(rect.width - right, y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+      const label = `avg ${definition.key === "cost" ? formatCostPerThousand(insights.average) : formatWhole(insights.average)}`;
+      ctx.font = `11px ${getComputedStyle(host).fontFamily || "sans-serif"}`;
+      const width = ctx.measureText(label).width + 10;
+      const labelX = rect.width - right - width;
+      ctx.fillStyle = chartStyles.getPropertyValue("--aap-range-chart-surface").trim() || "#ffffff";
+      ctx.fillRect(labelX, y - 9, width, 18);
+      ctx.fillStyle = axisColor;
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      ctx.fillText(label, labelX + 5, y);
+      ctx.restore();
+    }
+    if (insights?.spike) {
+      // Annotate an outlier so it reads as an event, not just a tall bar.
+      const index = data.days.indexOf(insights.spike.period);
+      if (index >= 0) {
+        const x = left + index * slot + slot / 2;
+        const y = top + plotHeight * (1 - insights.spike.value / maxValue);
+        const label = `${formatWhole(insights.spike.value)} · spike`;
+        ctx.save();
+        ctx.font = `600 11px ${getComputedStyle(host).fontFamily || "sans-serif"}`;
+        ctx.fillStyle = axisColor;
+        ctx.textAlign = x > rect.width - right - 60 ? "right" : x < left + 60 ? "left" : "center";
+        ctx.textBaseline = "bottom";
+        ctx.fillText(label, x, Math.max(top + 10, y - 4));
+        ctx.restore();
       }
     }
     setRangeChartReady(chart, true);
@@ -1071,22 +1390,34 @@
         // fails halfway through a React update or a canvas context loss.
         if (chart.overlay.dataset.aapReady === "true") {
           updateDescription(wrapper, definition);
-          if (state.data) updateSummaries(wrapper, definition, state.data);
+          if (state.data) {
+            updateSummaries(wrapper, definition, state.data);
+            updateInsights(wrapper, definition, state.data);
+          }
         }
       } catch {
         // A single malformed chart must not prevent the remaining four charts
         // from rendering. The native canvas is restored by this state change.
         setRangeChartReady(chart, false);
         restoreOriginalText(wrapper);
+        removeInsights(wrapper);
       }
+    }
+    // The per-Actor table follows the same range; it renders a skeleton until
+    // range data with per-Actor rows arrives.
+    try {
+      window.AAP_PORTFOLIO?.render(state.data);
+    } catch {
+      window.AAP_PORTFOLIO?.remove();
     }
     syncSelector();
   }
 
   function tooltipPeriodLabel(period) {
-    if (state.grouping === "day") return AAPR.formatDate(period, { month: "short", day: "numeric", year: "numeric" });
-    if (state.grouping === "month") return AAPR.formatDate(period, { month: "short", year: "numeric" });
-    return `Week of ${AAPR.formatDate(period, { month: "short", day: "numeric", year: "numeric" })}`;
+    const suffix = isPartialPeriod(period) ? " · in progress" : "";
+    if (state.grouping === "day") return `${AAPR.formatDate(period, { month: "short", day: "numeric", year: "numeric" })}${suffix}`;
+    if (state.grouping === "month") return `${AAPR.formatDate(period, { month: "short", year: "numeric" })}${suffix}`;
+    return `Week of ${AAPR.formatDate(period, { month: "short", day: "numeric", year: "numeric" })}${suffix}`;
   }
 
   const ACTOR_TOOLTIP_COLUMNS = [
@@ -1242,6 +1573,9 @@
     }
 
     rangeTooltip.classList.toggle("aap-range-tooltip-pinned", rangeTooltipState.pinned);
+    // Re-renders (e.g. "Load more Actors") must not jump the Actor list back
+    // to the top, so carry the inner scroll position across the rebuild.
+    const previousScroll = rangeTooltip.querySelector(".aap-range-tooltip-scroll")?.scrollTop || 0;
     rangeTooltip.replaceChildren();
     if (rangeTooltipState.pinned) {
       const pinBar = createElement("div", "aap-range-tooltip-pin-bar", "Pinned — click the bar again or press Esc to close");
@@ -1321,18 +1655,25 @@
           body.appendChild(rowElement);
         }
         table.appendChild(body);
-        rangeTooltip.appendChild(table);
+        // Only the Actor rows scroll; the pin bar, totals, and actions stay put.
+        const scroll = createElement("div", "aap-range-tooltip-scroll");
+        scroll.appendChild(table);
+        rangeTooltip.appendChild(scroll);
       } else if (!session.loading) {
         rangeTooltip.appendChild(createElement("div", "aap-range-tooltip-note", candidateCount ? "No loaded Actor had revenue or runs in this bucket." : "No active Actors were included in the monthly catalog."));
       }
+      const footer = createElement("div", "aap-range-tooltip-footer");
       if (session.failedTasks.length) {
-        rangeTooltip.appendChild(appendTooltipAction("Retry failed details", "retry", session.loading));
+        footer.appendChild(appendTooltipAction("Retry failed details", "retry", session.loading));
       }
       if (session.nextIndex < candidateCount) {
-        rangeTooltip.appendChild(appendTooltipAction("Load more Actors", "more", session.loading));
+        footer.appendChild(appendTooltipAction("Load more Actors", "more", session.loading));
       } else if (!session.loading && !session.failedTasks.length && loadedCount) {
-        rangeTooltip.appendChild(createElement("div", "aap-range-tooltip-note", "All catalog Actors loaded for this bucket."));
+        footer.appendChild(createElement("div", "aap-range-tooltip-note", "All catalog Actors loaded for this bucket."));
       }
+      if (footer.childElementCount) rangeTooltip.appendChild(footer);
+      const scroll = rangeTooltip.querySelector(".aap-range-tooltip-scroll");
+      if (scroll) scroll.scrollTop = previousScroll;
       return true;
     }
 
@@ -1367,10 +1708,15 @@
   function positionRangeTooltip(clientX, clientY) {
     if (!rangeTooltip) return;
     const tooltipRect = rangeTooltip.getBoundingClientRect();
+    const margin = 8;
     let left = clientX + 12;
     let top = clientY + 12;
-    if (left + tooltipRect.width > window.innerWidth - 8) left = clientX - tooltipRect.width - 12;
-    if (top + tooltipRect.height > window.innerHeight - 8) top = clientY - tooltipRect.height - 12;
+    if (left + tooltipRect.width > window.innerWidth - margin) left = clientX - tooltipRect.width - 12;
+    if (top + tooltipRect.height > window.innerHeight - margin) top = clientY - tooltipRect.height - 12;
+    // Flipping above the cursor can push a tall tooltip off-screen; keep the
+    // whole tooltip (header included) inside the viewport.
+    left = Math.max(margin, Math.min(left, window.innerWidth - tooltipRect.width - margin));
+    top = Math.max(margin, Math.min(top, window.innerHeight - tooltipRect.height - margin));
     rangeTooltip.style.left = `${left}px`;
     rangeTooltip.style.top = `${top}px`;
   }

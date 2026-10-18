@@ -493,12 +493,20 @@
     }
     const values = rateEntries(stats).map((entry) => entry.rate).filter((value) => value != null);
     const lowest = values.length ? Math.min(...values) : null;
+    // Only call out the worst day when it fell below the chart's 95% guide.
+    const lowestClass = lowest != null && lowest < 0.95 ? "aap-debugging-lowest aap-debugging-lowest-warning" : "aap-debugging-lowest";
     cell.append(
       createElement("strong", null, formatRate(stats.rate)),
       createElement("small", null, `${formatInteger(stats.succeeded)} / ${formatInteger(stats.total)} succeeded`),
-      createElement("small", "aap-debugging-lowest", `lowest ${formatRate(lowest)}`),
+      createElement("small", lowestClass, `lowest day ${formatRate(lowest)}`),
     );
     return cell;
+  }
+
+  function skeleton(width, className = "aap-skeleton") {
+    const bar = createElement("span", className);
+    bar.style.setProperty("--aap-skeleton-width", `${width}px`);
+    return bar;
   }
 
   function chartCell(row) {
@@ -520,8 +528,17 @@
 
   function chartRow(row, total = false) {
     const tableRow = document.createElement("tr");
-    if (row.loading) tableRow.className = "aap-debugging-row-loading";
-    else if (row.failed) tableRow.className = "aap-debugging-row-partial";
+    if (row.loading) {
+      tableRow.className = "aap-debugging-row-loading";
+      tableRow.setAttribute("aria-busy", "true");
+      const summary = createElement("td", "aap-debugging-summary-cell");
+      summary.append(skeleton(56, "aap-skeleton aap-skeleton-strong"), skeleton(96), skeleton(72));
+      const chart = createElement("td", "aap-debugging-chart-cell");
+      chart.appendChild(skeleton(0, "aap-skeleton aap-skeleton-chart"));
+      tableRow.append(actorCell(row.actor, total), summary, chart);
+      return tableRow;
+    }
+    if (row.failed) tableRow.className = "aap-debugging-row-partial";
     tableRow.append(actorCell(row.actor, total), summaryCell(row.stats), chartCell(row));
     return tableRow;
   }
@@ -648,8 +665,10 @@
         : `Showing ${sortedRows().length} matching Actors · ${loadedCount} details loaded · ${state.actors.length} total · ${monthLabel(state.monthStartAt)}`;
       refs.status.textContent = state.error || "";
       refs.overviewBody.replaceChildren();
-      if (state.total) refs.overviewBody.appendChild(chartRow({ actor: { id: "__all__", title: "All actors", name: "Account total" }, stats: state.total }, true));
-      else if (!state.loading) refs.overviewBody.appendChild(emptyTableRow(state.error || "No run data available."));
+      const totalActor = { id: "__all__", title: "All actors", name: "Account total" };
+      if (state.total) refs.overviewBody.appendChild(chartRow({ actor: totalActor, stats: state.total }, true));
+      else if (state.loading) refs.overviewBody.appendChild(chartRow({ actor: totalActor, loading: true }, true));
+      else refs.overviewBody.appendChild(emptyTableRow(state.error || "No run data available."));
       refs.actorsBody.replaceChildren();
       for (const row of sortedRows()) refs.actorsBody.appendChild(chartRow(row));
       if (!sortedRows().length && !state.loading) refs.actorsBody.appendChild(emptyTableRow(state.error || "No Actor run data available."));
@@ -734,9 +753,9 @@
     const status = createElement("div", "aap-debugging-status");
 
     function chartTableSection(label, ariaLabel, bodyKey) {
-      const section = createElement("section", "aap-debugging-section");
+      const section = createElement("section", `aap-debugging-section aap-table-section ${bodyKey === "overviewBody" ? "aap-table-section-total" : "aap-table-section-rows"}`);
       section.setAttribute("aria-label", label);
-      const shell = createElement("div", "aap-debugging-table-shell");
+      const shell = createElement("div", "aap-debugging-table-shell aap-table-shell");
       const scroll = createElement("div", "aap-debugging-table-scroll");
       const table = document.createElement("table");
       table.className = "aap-debugging-table";
@@ -757,7 +776,7 @@
     const selectedTitle = createElement("h3", "aap-debugging-section-title", "Selected Actor");
     const selectedSummary = createElement("span", "aap-debugging-selected-summary");
     selectedTitle.appendChild(selectedSummary);
-    const selectedShell = createElement("div", "aap-debugging-table-shell");
+    const selectedShell = createElement("div", "aap-debugging-table-shell aap-table-shell");
     const selectedScroll = createElement("div", "aap-debugging-table-scroll");
     const selectedTable = document.createElement("table");
     selectedTable.className = "aap-debugging-table";
@@ -775,7 +794,7 @@
     runsHeader.appendChild(createElement("h3", "aap-debugging-section-title", "User runs"));
     const runsStatus = createElement("span", "aap-debugging-runs-status");
     runsHeader.appendChild(runsStatus);
-    const runsShell = createElement("div", "aap-debugging-table-shell");
+    const runsShell = createElement("div", "aap-debugging-table-shell aap-table-shell");
     const runsScroll = createElement("div", "aap-debugging-table-scroll");
     const runsTable = document.createElement("table");
     runsTable.className = "aap-debugging-runs-table";

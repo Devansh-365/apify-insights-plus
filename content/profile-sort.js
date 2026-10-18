@@ -132,17 +132,42 @@
     }
   }
 
+  // Stroke icons drawn on the same 20px grid as Apify's own profile metric icons.
+  const METRIC_ICON_PATHS = {
+    trend: "M2.5 14.167 7.5 9.167l3.333 3.333L17.5 5.833M12.5 5.833h5v5",
+    calendar: "M3.333 7.5h13.334M6.667 2.5v3.333M13.333 2.5v3.333M4.167 4.167h11.666c.46 0 .834.373.834.833v10.833c0 .46-.373.834-.834.834H4.167a.833.833 0 0 1-.834-.834V5c0-.46.373-.833.834-.833",
+    star: "m10 2.5 2.318 4.697 5.182.753-3.75 3.655.885 5.162L10 14.33l-4.635 2.437.885-5.162L2.5 7.95l5.182-.753z",
+    bookmark: "M5 3.333c0-.46.373-.833.833-.833h8.334c.46 0 .833.373.833.833V17.5L10 14.167 5 17.5z",
+  };
+
+  function metricIcon(name) {
+    const namespace = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(namespace, "svg");
+    svg.setAttribute("viewBox", "0 0 20 20");
+    svg.setAttribute("fill", "none");
+    svg.setAttribute("width", "16");
+    svg.setAttribute("height", "16");
+    const path = document.createElementNS(namespace, "path");
+    path.setAttribute("d", METRIC_ICON_PATHS[name] || "");
+    path.setAttribute("stroke", "currentColor");
+    path.setAttribute("stroke-width", "1.667");
+    path.setAttribute("stroke-linecap", "round");
+    path.setAttribute("stroke-linejoin", "round");
+    svg.appendChild(path);
+    return svg;
+  }
+
   function renderProfileStats() {
     if (!state.profileStatsHost?.isConnected) return;
     const loading = state.profileStatsLoading;
     const error = state.profileStatsError;
     const runMetrics = [
-      ["totalRuns", "Total runs", state.profileStats?.totalRuns, "↗"],
-      ["monthlyRuns", "Monthly runs", state.profileStats?.monthlyRuns, "↻"],
+      ["totalRuns", "Total runs", state.profileStats?.totalRuns, "trend"],
+      ["monthlyRuns", "Monthly runs", state.profileStats?.monthlyRuns, "calendar"],
     ];
     const communityMetrics = [
-      [null, "Reviews", state.profileStats?.totalReviews, "☆"],
-      [null, "Bookmarks", state.profileStats?.totalBookmarks, "▱"],
+      [null, "Reviews", state.profileStats?.totalReviews, "star"],
+      [null, "Bookmarks", state.profileStats?.totalBookmarks, "bookmark"],
     ];
     const createHeading = (text, className) => {
       const heading = createElement("div", className, text);
@@ -165,8 +190,9 @@
     };
     const createRows = (metrics, className) => metrics.map(([metricKey, label, value, icon]) => {
       const row = createElement("div", `aap-profile-run-metric ${className}`.trim());
-      const iconElement = createElement("span", "aap-profile-run-metric-icon", icon);
+      const iconElement = createElement("span", "aap-profile-run-metric-icon");
       iconElement.setAttribute("aria-hidden", "true");
+      iconElement.appendChild(metricIcon(icon));
       const displayValue = loading ? "Loading…" : error ? "Unavailable" : formatCompact(value);
       const text = createElement("span", "aap-profile-run-metric-text");
       text.append(

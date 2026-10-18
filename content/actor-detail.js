@@ -112,10 +112,19 @@
   }
 
   function renderLoading() {
-    host.replaceChildren(renderAccordion(
-      "Loading the latest public activity snapshot…",
-      createElement("div", "aap-actor-detail-loading", "Loading public Actor statistics…"),
-    ));
+    const placeholder = createElement("div", "aap-actor-detail-summary aap-actor-detail-loading");
+    placeholder.setAttribute("aria-label", "Loading public Actor statistics");
+    for (let index = 0; index < 6; index++) {
+      const card = createElement("div", "aap-actor-detail-stat");
+      const label = createElement("span", "aap-skeleton");
+      label.style.setProperty("--aap-skeleton-width", "72px");
+      const value = createElement("span", "aap-skeleton aap-skeleton-strong");
+      value.style.setProperty("--aap-skeleton-width", index < 3 ? "56px" : "120px");
+      value.style.setProperty("--aap-skeleton-height", "20px");
+      card.append(label, value);
+      placeholder.appendChild(card);
+    }
+    host.replaceChildren(renderAccordion("Loading the latest public activity snapshot…", placeholder));
     host.setAttribute("aria-busy", "true");
   }
 
@@ -257,49 +266,45 @@
     const notice = createElement(
       "p",
       "aap-actor-detail-chart-unavailable",
-      "Apify currently publishes public run totals by status, not the count for each individual day.",
+      "Apify publishes public run totals by status, not per-day counts.",
     );
-    section.appendChild(notice);
 
     const values = data.runStatusDefinitions.map((status) => ({ ...status, count: data.runStats[status.key] || 0 }));
-    const maximum = Math.max(1, ...values.map((status) => status.count));
-    const chart = createElement("div", "aap-actor-detail-chart");
-    chart.setAttribute("role", "img");
-    chart.setAttribute("aria-label", "Run status distribution for the last 30 days");
-
-    const yAxis = createElement("div", "aap-actor-detail-chart-axis");
-    yAxis.append(
-      createElement("span", null, formatInteger(maximum)),
-      createElement("span", null, formatInteger(Math.ceil(maximum / 2))),
-      createElement("span", null, "0"),
+    const total = values.reduce((sum, status) => sum + status.count, 0);
+    // A single stacked bar shows the share of each status without spending
+    // vertical space on bars that are usually zero.
+    const bar = createElement("div", "aap-actor-detail-status-bar");
+    bar.setAttribute("role", "img");
+    bar.setAttribute(
+      "aria-label",
+      `Run status for the last 30 days: ${values.map((status) => `${status.label} ${formatInteger(status.count)}`).join(", ")}`,
     );
-    chart.appendChild(yAxis);
-
-    const plot = createElement("div", "aap-actor-detail-chart-plot");
+    if (!total) bar.classList.add("aap-actor-detail-status-bar-empty");
     for (const status of values) {
-      const column = createElement("div", "aap-actor-detail-chart-column");
-      const count = createElement("span", "aap-actor-detail-chart-count", formatInteger(status.count));
-      const barTrack = createElement("div", "aap-actor-detail-chart-bar-track");
-      const bar = createElement("div", "aap-actor-detail-chart-bar");
-      bar.style.backgroundColor = status.color;
-      bar.style.height = status.count ? `${Math.max(5, (status.count / maximum) * 100)}%` : "0%";
-      bar.title = `${status.label}: ${formatInteger(status.count)}`;
-      barTrack.appendChild(bar);
-      column.append(count, barTrack, createElement("span", "aap-actor-detail-chart-label", status.label));
-      plot.appendChild(column);
+      if (!status.count) continue;
+      const segment = createElement("span", "aap-actor-detail-status-segment");
+      segment.style.flexGrow = String(status.count);
+      segment.style.backgroundColor = status.color;
+      segment.title = `${status.label}: ${formatInteger(status.count)}`;
+      bar.appendChild(segment);
     }
-    chart.appendChild(plot);
-    section.appendChild(chart);
+    section.appendChild(bar);
 
-    const legend = createElement("div", "aap-actor-detail-chart-legend");
+    const legend = createElement("dl", "aap-actor-detail-status-legend");
     for (const status of values) {
-      const item = createElement("span", "aap-actor-detail-chart-legend-item");
+      const item = createElement("div", `aap-actor-detail-status-item${status.count ? "" : " aap-actor-detail-status-item-zero"}`);
+      const term = createElement("dt");
       const dot = createElement("span", "aap-actor-detail-chart-legend-dot");
       dot.style.backgroundColor = status.color;
-      item.append(dot, createElement("span", null, `${status.label} ${formatInteger(status.count)}`));
+      term.append(dot, document.createTextNode(status.label));
+      const detail = createElement("dd");
+      const share = total ? `${((status.count / total) * 100).toFixed(status.count === total ? 0 : 1)}%` : "–";
+      detail.append(createElement("strong", null, formatInteger(status.count)), createElement("span", null, share));
+      item.append(term, detail);
       legend.appendChild(item);
     }
     section.appendChild(legend);
+    section.appendChild(notice);
     return section;
   }
 

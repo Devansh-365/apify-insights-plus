@@ -407,10 +407,16 @@
     return cell;
   }
 
+  function skeleton(width, strong = false) {
+    const bar = createElement("span", strong ? "aap-skeleton aap-skeleton-strong" : "aap-skeleton");
+    bar.style.setProperty("--aap-skeleton-width", `${width}px`);
+    return bar;
+  }
+
   function metricCell(row, key, sublabel) {
     const cell = createElement("td", "aap-acquisition-metric");
     if (row.loading) {
-      cell.append(createElement("strong", null, "…"), createElement("small", null, "Loading"));
+      cell.append(skeleton(44, true), skeleton(36), skeleton(64));
       return cell;
     }
     const delta = change(row, key);
@@ -423,7 +429,7 @@
   function sourceCell(row, key, emptyText) {
     const cell = createElement("td", "aap-acquisition-source");
     if (row.loading) {
-      cell.appendChild(createElement("span", "aap-acquisition-empty", "Loading…"));
+      cell.append(skeleton(120), skeleton(96), skeleton(108));
       return cell;
     }
     const items = Array.isArray(row?.data?.[key]) ? row.data[key] : [];
@@ -618,9 +624,9 @@
 
     const status = createElement("div", "aap-acquisition-status");
     function tableShell(label, bodyKey) {
-      const section = createElement("section", `aap-acquisition-table-section ${bodyKey === "totalBody" ? "aap-acquisition-total-section" : "aap-acquisition-actors-section"}`);
+      const section = createElement("section", `aap-acquisition-table-section aap-table-section ${bodyKey === "totalBody" ? "aap-acquisition-total-section aap-table-section-total" : "aap-acquisition-actors-section aap-table-section-rows"}`);
       section.setAttribute("aria-label", label);
-      const shell = createElement("div", "aap-acquisition-table-shell");
+      const shell = createElement("div", "aap-acquisition-table-shell aap-table-shell");
       const scroll = createElement("div", "aap-acquisition-table-scroll");
       const table = document.createElement("table");
       table.className = "aap-acquisition-table";
