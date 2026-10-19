@@ -72,6 +72,48 @@ global.fetch = async (requestUrl) => {
     assert.equal(snapshot.builders.length, 2);
     assert.equal(snapshot.builders[0].metrics.monthlyRuns, 3);
     assert.equal(snapshot.builders[0].metrics.totalRuns, 10);
+
+    // A 429 is retried (pausing all workers) and the profile still counts.
+    // A profile that never succeeds is published as missing instead of
+    // failing the whole refresh.
+    let builderARateLimits = 0;
+    global.fetch = async (requestUrl) => {
+      const url = new URL(requestUrl);
+      if (url.hostname === "apify.com") {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          async text() {
+            return "<url><loc>https://apify.com/builder-a</loc></url><url><loc>https://apify.com/builder-b</loc></url><url><loc>https://apify.com/builder-c</loc></url>";
+          },
+        };
+      }
+      const username = url.searchParams.get("username");
+      const retryNow = { get: (name) => (name === "retry-after" ? "0" : null) };
+      if (username === "builder-a" && builderARateLimits < 2) {
+        builderARateLimits++;
+        return { ok: false, status: 429, headers: retryNow, async json() { return { error: { message: "You have exceeded the rate limit of 60 requests per second" } }; } };
+      }
+      if (username === "builder-c") {
+        return { ok: false, status: 500, headers: retryNow, async json() { return { error: { message: "Internal error" } }; } };
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        async json() {
+          return { data: { total: 1, count: 1, items: [{ id: `actor-${username}`, username, name: "x", userFullName: username, stats: { totalUsers: 1, totalUsers30Days: 1, totalRuns: 1, publicActorRunStats30Days: { TOTAL: 1 } } }] } };
+        },
+      };
+    };
+    const resilient = await source.buildSnapshot();
+    assert.equal(builderARateLimits, 2);
+    assert.ok(resilient.scan.rateLimitedResponses >= 2);
+    assert.equal(resilient.scan.failedProfiles, 1);
+    assert.equal(resilient.scan.coverage, "observed");
+    assert.equal(resilient.builders.length, 2, "the two scannable builders are published");
+
     console.log("shared benchmark generator tests passed");
   } finally {
     global.fetch = originalFetch;

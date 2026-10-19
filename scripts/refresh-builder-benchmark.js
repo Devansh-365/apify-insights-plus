@@ -13,9 +13,19 @@ const GITHUB_API_URL = "https://api.github.com";
 const PAGE_SIZE = 1000;
 const PAGE_INTERVAL_MS = 1_100;
 const PROFILE_SCAN_CONCURRENCY = 16;
-const MAX_RETRIES = 5;
-const RETRY_BASE_DELAY_MS = 1_000;
+// Apify allows 60 requests/second per resource and the public Store counts
+// as one resource for the whole scan. Every worker shares one pacer that
+// stays well below that, and a 429 pauses all workers, not just the one
+// that received it (one worker backing off while 15 keep going never
+// recovers).
+const MAX_REQUESTS_PER_SECOND = 40;
+const MAX_RETRIES = 8;
+const RETRY_BASE_DELAY_MS = 500;
 const RETRY_MAX_DELAY_MS = 60_000;
+// A handful of profiles failing should not throw away the other ~7,900;
+// publish with them marked as missing instead.
+const MAX_FAILED_PROFILE_SHARE = 0.005;
+const MIN_ALLOWED_FAILED_PROFILES = 5;
 const DEFAULT_FILENAME = "builder-rankings.json";
 const DEFAULT_OUTPUT_PATH = path.join(process.cwd(), DEFAULT_FILENAME);
 
@@ -55,6 +65,13 @@ function missingFieldCounts(builders) {
   return counts;
 }
 
+// Apify's recommended backoff: wait a random time between DELAY and
+// 2 * DELAY, doubling DELAY each attempt, unless the server says how long.
+function backoffDelay(attempt) {
+  const delay = Math.min(RETRY_MAX_DELAY_MS, RETRY_BASE_DELAY_MS * 2 ** attempt);
+  return Math.min(RETRY_MAX_DELAY_MS, delay + Math.random() * delay);
+}
+
 function retryAfterMilliseconds(response, attempt) {
   const value = response.headers.get("retry-after");
   if (value) {
@@ -63,13 +80,32 @@ function retryAfterMilliseconds(response, attempt) {
     const timestamp = Date.parse(value);
     if (Number.isFinite(timestamp)) return Math.min(RETRY_MAX_DELAY_MS, Math.max(0, timestamp - Date.now()));
   }
-  return Math.min(RETRY_MAX_DELAY_MS, RETRY_BASE_DELAY_MS * 2 ** attempt);
+  return backoffDelay(attempt);
+}
+
+let rateLimitedResponses = 0;
+
+// Shared pacing for every worker: request starts are spaced evenly, and a
+// rate-limit response pushes the next start for everyone.
+let nextRequestAt = 0;
+let cooldownUntil = 0;
+
+async function takeRequestSlot() {
+  const now = Date.now();
+  const at = Math.max(now, nextRequestAt, cooldownUntil);
+  nextRequestAt = at + Math.ceil(1000 / MAX_REQUESTS_PER_SECOND);
+  if (at > now) await wait(at - now);
+}
+
+function startCooldown(milliseconds) {
+  cooldownUntil = Math.max(cooldownUntil, Date.now() + milliseconds);
 }
 
 async function fetchWithRetry(url, options, parseResponse) {
   for (let attempt = 0; ; attempt++) {
     let response;
     try {
+      await takeRequestSlot();
       response = await fetch(url, {
         ...options,
         headers: {
@@ -80,7 +116,7 @@ async function fetchWithRetry(url, options, parseResponse) {
       });
     } catch (error) {
       if (attempt >= MAX_RETRIES) throw error;
-      await wait(Math.min(RETRY_MAX_DELAY_MS, RETRY_BASE_DELAY_MS * 2 ** attempt));
+      await wait(backoffDelay(attempt));
       continue;
     }
 
@@ -98,7 +134,12 @@ async function fetchWithRetry(url, options, parseResponse) {
       const message = data?.error?.message || data?.message || `HTTP ${response.status}`;
       throw new Error(`Request failed: ${message}`);
     }
-    await wait(retryAfterMilliseconds(response, attempt));
+    const delay = retryAfterMilliseconds(response, attempt);
+    if (response.status === 429) {
+      rateLimitedResponses++;
+      startCooldown(delay);
+    }
+    await wait(delay);
   }
 }
 
@@ -216,7 +257,7 @@ async function scanProfile(username, accumulator, onPage = () => {}) {
   };
 }
 
-async function scanStore({ onProgress = () => {} } = {}) {
+async function scanStore({ onProgress = () => {}, onRetry = () => {} } = {}) {
   const capturedAt = new Date().toISOString();
   const accumulator = benchmark.createAccumulator({ firstSeenAt: capturedAt });
   const sitemap = await fetchText(USERS_SITEMAP_URL);
@@ -226,7 +267,9 @@ async function scanStore({ onProgress = () => {} } = {}) {
   let expectedActors = 0;
   let pageCount = 0;
   let completedProfiles = 0;
-  await mapConcurrent(usernames, PROFILE_SCAN_CONCURRENCY, async (username) => {
+  // Actors are de-duplicated by id, so rescanning a profile that failed
+  // midway cannot double-count the pages it already added.
+  async function scanAndRecord(username) {
     const result = await scanProfile(username, accumulator);
     expectedActors += result.expectedActors;
     pageCount += result.pageCount;
@@ -240,7 +283,35 @@ async function scanStore({ onProgress = () => {} } = {}) {
       expectedActors,
     });
     return result;
+  }
+
+  let failed = [];
+  await mapConcurrent(usernames, PROFILE_SCAN_CONCURRENCY, async (username) => {
+    try {
+      return await scanAndRecord(username);
+    } catch (error) {
+      failed.push({ username, error });
+      return null;
+    }
   });
+
+  if (failed.length) {
+    onRetry({ failedProfiles: failed.length });
+    const retrying = failed;
+    failed = [];
+    for (const { username } of retrying) {
+      try {
+        await scanAndRecord(username);
+      } catch (error) {
+        failed.push({ username, error });
+      }
+    }
+  }
+
+  const allowedFailures = Math.max(MIN_ALLOWED_FAILED_PROFILES, Math.floor(usernames.length * MAX_FAILED_PROFILE_SHARE));
+  if (failed.length > allowedFailures) {
+    throw new Error(`${failed.length} profiles could not be scanned (first: ${failed[0].username}: ${failed[0].error?.message || failed[0].error}).`);
+  }
 
   if (!accumulator.indexedActors && expectedActors) throw new Error("The public Store returned no observable Actors.");
 
@@ -256,7 +327,9 @@ async function scanStore({ onProgress = () => {} } = {}) {
       sourceTotal: expectedActors,
       sourceTotalChanged: false,
       sourceWindowEnded: false,
-      coverage: accumulator.indexedActors < expectedActors ? "observed" : "complete",
+      coverage: failed.length || accumulator.indexedActors < expectedActors ? "observed" : "complete",
+      failedProfiles: failed.length,
+      rateLimitedResponses,
       missingFields: missingFieldCounts(builders),
       definitionVersion: 2,
       baseline: true,
@@ -304,7 +377,11 @@ async function main() {
       if (completedProfiles !== 1 && completedProfiles % 100 !== 0 && completedProfiles !== profileCount) return;
       console.log(`[profiles] ${completedProfiles}/${profileCount}; latest ${profile}; pages ${pageCount}; ${indexedActors.toLocaleString()} Actors indexed; source total ${expectedActors.toLocaleString()}`);
     },
+    onRetry: ({ failedProfiles }) => {
+      console.log(`[retry] ${failedProfiles} profile(s) failed in the parallel pass; retrying them one at a time.`);
+    },
   });
+  console.log(`[scan] coverage ${snapshot.scan.coverage}; failed profiles ${snapshot.scan.failedProfiles}; rate-limited responses ${snapshot.scan.rateLimitedResponses}.`);
   const contents = JSON.stringify(snapshot);
   const targetPath = outputPath || (!process.env.BUILDER_BENCHMARK_GIST_ID ? DEFAULT_OUTPUT_PATH : "");
   if (targetPath) {

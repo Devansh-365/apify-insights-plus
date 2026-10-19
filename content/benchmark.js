@@ -7,6 +7,7 @@
   const SHARED_SNAPSHOT_URL = "https://gist.githubusercontent.com/Devansh-365/5cffdc0292be6bf8f8223eaa33ae1d74/raw";
   const PAGE_SIZE = 1000;
   const SCAN_PAGE_INTERVAL_MS = 1_100;
+  const MAX_SNAPSHOT_AGE_MS = 48 * 60 * 60 * 1000;
   const SCAN_SORTS = ["relevance", "popularity", "newest", "lastUpdate"];
   const RANK_METRIC_KEYS = AAP_PROFILE_SORT.RANK_METRIC_KEYS || [
     "totalUsers",
@@ -239,6 +240,11 @@
     renderTags();
   }
 
+  function snapshotTooOld(snapshot) {
+    const capturedAt = Date.parse(snapshot?.capturedAt);
+    return Number.isFinite(capturedAt) && Date.now() - capturedAt > MAX_SNAPSHOT_AGE_MS;
+  }
+
   async function loadSnapshot(routeKey) {
     if (state.snapshotPromise) return state.snapshotPromise;
     const operation = (async () => {
@@ -247,7 +253,9 @@
         const sharedSnapshot = await loadSharedSnapshot();
         if (state.routeKey !== routeKey) return;
         state.snapshot = sharedSnapshot;
-        state.snapshotStale = false;
+        // The daily refresh can fail; label ranks from an old snapshot as
+        // stale instead of presenting them as current.
+        state.snapshotStale = snapshotTooOld(sharedSnapshot);
         state.scanError = null;
       } catch (error) {
         if (state.routeKey !== routeKey) return;
