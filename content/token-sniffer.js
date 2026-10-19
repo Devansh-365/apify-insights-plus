@@ -15,6 +15,10 @@
   const AUTH_SCOPE_REPLAY_EVENT = "aap-request-auth-scope";
   const API_REQUEST_EVENT = "aap-api-request";
   const API_RESPONSE_EVENT = "aap-api-response";
+  const CONSOLE_REQUEST_EVENT = "aap-console-request";
+  const TEE_EVENT = "aap-api-tee";
+  const TEE_REPLAY_EVENT = "aap-request-tee-replay";
+  const MAX_TEE_BUFFER = 10;
   const BACKEND_ORIGIN = "https://console-backend.apify.com";
   const MAX_REQUEST_ID_LENGTH = 128;
   const MAX_QUERY_LENGTH = 4096;
@@ -176,15 +180,97 @@
     }
   }
 
+  // The token is recognized from any Console backend request (the earliest
+  // ones are not analytics calls), but requests the extension may make are
+  // still limited to allowedApiUrl().
+  function isBackendUrl(value) {
+    try {
+      return new URL(value, location.origin).origin === BACKEND_ORIGIN;
+    } catch {
+      return false;
+    }
+  }
+
+  // Only the Console's own GET requests to the allowlisted analytics
+  // endpoints are teed into the extension cache.
+  function teeableUrl(value) {
+    try {
+      const absolute = new URL(value, location.origin).href;
+      const url = allowedApiUrl(absolute);
+      return url && url.pathname.startsWith("/actor-analytics/") ? url.href : null;
+    } catch {
+      return null;
+    }
+  }
+
+  const recentConsoleRequests = new Map();
+  const teeBuffer = new Map();
+
+  function dispatchConsoleRequest(url) {
+    recentConsoleRequests.set(url, Date.now());
+    if (recentConsoleRequests.size > MAX_TEE_BUFFER * 2) recentConsoleRequests.delete(recentConsoleRequests.keys().next().value);
+    window.dispatchEvent(new CustomEvent(CONSOLE_REQUEST_EVENT, { detail: { url } }));
+  }
+
+  // Reuse is limited to response data the page itself just received; the
+  // token is never part of the event.
+  function dispatchTee(url, data, headers) {
+    const detail = { url, data, headers };
+    teeBuffer.delete(url);
+    teeBuffer.set(url, detail);
+    if (teeBuffer.size > MAX_TEE_BUFFER) teeBuffer.delete(teeBuffer.keys().next().value);
+    window.dispatchEvent(new CustomEvent(TEE_EVENT, { detail }));
+  }
+
+  function responseHeaders(getHeader) {
+    try {
+      return {
+        etag: !!getHeader("etag"),
+        lastModified: !!getHeader("last-modified"),
+        cacheControl: getHeader("cache-control") || null,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  function onXhrLoad() {
+    try {
+      if (!this.__aptTeeUrl || this.status < 200 || this.status >= 300) return;
+      let data;
+      if (this.responseType === "" || this.responseType === "text") data = JSON.parse(this.responseText);
+      else if (this.responseType === "json") data = this.response;
+      else return;
+      dispatchTee(this.__aptTeeUrl, data, responseHeaders((name) => this.getResponseHeader(name)));
+    } catch {
+      /* never let teeing break the Console */
+    }
+  }
+
   const OrigOpen = XMLHttpRequest.prototype.open;
   const OrigSetHeader = XMLHttpRequest.prototype.setRequestHeader;
   XMLHttpRequest.prototype.open = function (method, url) {
     this.__aptUrl = typeof url === "string" ? url : String(url);
     announceSeen(parseInfo(this.__aptUrl));
+    try {
+      // Reset on every open(): a reused XHR must not tee its new response
+      // under the previous request's URL.
+      const teeUrl = String(method || "GET").toUpperCase() === "GET" ? teeableUrl(this.__aptUrl) : null;
+      this.__aptTeeUrl = teeUrl;
+      if (teeUrl) {
+        dispatchConsoleRequest(teeUrl);
+        if (!this.__aptTeeListener) {
+          this.__aptTeeListener = true;
+          this.addEventListener("load", onXhrLoad);
+        }
+      }
+    } catch {
+      /* never let teeing break the Console */
+    }
     return OrigOpen.apply(this, arguments);
   };
   XMLHttpRequest.prototype.setRequestHeader = function (name, value) {
-    if (name && name.toLowerCase() === "authorization" && allowedApiUrl(this.__aptUrl)) {
+    if (name && name.toLowerCase() === "authorization" && isBackendUrl(this.__aptUrl)) {
       announceToken(value);
     }
     return OrigSetHeader.apply(this, arguments);
@@ -192,18 +278,32 @@
 
   const OrigFetch = window.fetch;
   window.fetch = function (input, init) {
+    let teeUrl = null;
     try {
-      const url = typeof input === "string" ? input : input && input.url;
+      const url = typeof input === "string" ? input : input && (input.url || input.href);
       announceSeen(parseInfo(url));
       const headers = init?.headers || (typeof input === "string" ? null : input?.headers);
-      if (url && headers && allowedApiUrl(url)) {
+      if (url && headers && isBackendUrl(url)) {
         const auth = new Headers(headers).get("authorization");
         if (auth) announceToken(auth);
       }
+      const method = String(init?.method || (typeof input === "object" && input?.method) || "GET").toUpperCase();
+      teeUrl = method === "GET" && url ? teeableUrl(url) : null;
+      if (teeUrl) dispatchConsoleRequest(teeUrl);
     } catch {
       /* never let sniffing break a real request */
     }
-    return OrigFetch.apply(this, arguments);
+    const result = OrigFetch.apply(this, arguments);
+    if (teeUrl) {
+      // This reaction is registered before the caller's, so the clone is made
+      // before the Console reads the body.
+      result.then((response) => {
+        if (!response?.ok) return;
+        const headers = responseHeaders((name) => response.headers.get(name));
+        response.clone().json().then((data) => dispatchTee(teeUrl, data, headers)).catch(() => {});
+      }).catch(() => {});
+    }
+    return result;
   };
 
   window.addEventListener(API_REQUEST_EVENT, (event) => {
@@ -219,4 +319,12 @@
     if (lastInfo) dispatchSeen(lastInfo);
   });
   window.addEventListener(AUTH_SCOPE_REPLAY_EVENT, dispatchAuthScope);
+  window.addEventListener(TEE_REPLAY_EVENT, () => {
+    for (const [url, startedAt] of recentConsoleRequests) {
+      if (Date.now() - startedAt < 5_000 && !teeBuffer.has(url)) {
+        window.dispatchEvent(new CustomEvent(CONSOLE_REQUEST_EVENT, { detail: { url } }));
+      }
+    }
+    for (const detail of teeBuffer.values()) window.dispatchEvent(new CustomEvent(TEE_EVENT, { detail }));
+  });
 })();

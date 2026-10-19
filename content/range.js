@@ -8,12 +8,16 @@
   // back to Original with the navigation toggle.
   const VIEW_KEY = "aap.monetizationView.v2";
   const CACHE_CLEAR_KEY = "aap.cacheClearedAt";
-  const HISTORICAL_CACHE_TTL_MS = 15 * 60 * 1000;
+  // A range that ends before this month cannot change; keep it a day.
+  const HISTORICAL_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
   // Keep the range snapshot stable for a few minutes. Live day totals are
   // still refreshed separately, while the expensive multi-month range is
   // refreshed in the background without replacing the visible chart.
   const CURRENT_MONTH_CACHE_TTL_MS = 5 * 60 * 1000;
   const PARTIAL_RETRY_MS = 30 * 1000;
+  const PREFETCH_MONTHS = 3;
+  const RANGE_SNAPSHOT_VIEW = "range";
+  const CLEAR_JITTER_MS = 2_000;
   const MAX_MEMORY_CACHE_ENTRIES = 8;
   const CONTROL_CLASS = "aap-range-selector";
   const MODE_CLASS = "aap-range-mode";
@@ -69,11 +73,14 @@
     loading: false,
     refreshing: false,
     loadedKey: null,
+    loadingKey: null,
+    loadTag: null,
     retryAt: 0,
     loadId: 0,
   };
 
   const memoryCache = new Map();
+  let adjacentPrefetched = false;
   const actorDetailCache = new Map();
   let tooltipLoadId = 0;
   let actorPrefetchKey = null;
@@ -87,11 +94,26 @@
     tooltipLoadId++;
     actorPrefetchKey = null;
     actorPrefetchRun++;
+    adjacentPrefetched = false;
     resetRangeData();
-    if (state.view === "custom" && validRange(state.range) && state.observedMonth) {
+    if (state.view === "custom" && canLoad()) {
       renderRangeView();
       loadRange();
     }
+  });
+  // A stale cached response was refreshed in the background: reload the range
+  // (now served from the fresh cache) so the charts show the new numbers.
+  let revalidationTimer = null;
+  AAP_API.onRevalidated?.(({ path }) => {
+    if (!path || path === "public" || state.view !== "custom") return;
+    clearTimeout(revalidationTimer);
+    revalidationTimer = setTimeout(() => {
+      const key = dataKey();
+      if (!key || state.loading || state.refreshing) return;
+      // Refresh in place: the chart and its loaded Actor colors stay visible.
+      memoryCache.delete(key);
+      if (canLoad()) loadRange();
+    }, 800);
   });
   chrome.storage.onChanged?.addListener((changes, area) => {
     if (area !== "local") return;
@@ -106,8 +128,11 @@
       state.loading = false;
       state.refreshing = false;
       // Keep the current chart on screen while the cleared range is fetched
-      // again, instead of replacing it with a blank loading state.
-      if (state.view === "custom" && validRange(state.range) && state.observedMonth) loadRange();
+      // again, instead of replacing it with a blank loading state. Each tab
+      // waits a random moment so several open tabs don't all refetch at once.
+      setTimeout(() => {
+        if (state.view === "custom" && canLoad()) loadRange();
+      }, Math.random() * CLEAR_JITTER_MS);
     }
     if (changes[TOOLTIP_ACTOR_COUNT_KEY]) {
       tooltipActorCount = normalizeTooltipActorCount(changes[TOOLTIP_ACTOR_COUNT_KEY].newValue);
@@ -239,6 +264,16 @@
       start: range.startDate || `${range.start}-01`,
       end: requestedEnd > currentDate() ? currentDate() : requestedEnd,
     };
+  }
+
+  // The Console's own analytics request used to be the only signal that the
+  // page was ready; the auth scope arrives earlier, so either is enough.
+  function canLoad() {
+    return validRange(state.range) && Boolean(state.observedMonth || AAP_API.hasToken?.());
+  }
+
+  function snapshotScope(key) {
+    return key.replace(/[^a-zA-Z0-9|:._-]/g, "_").slice(0, 180);
   }
 
   function rangeCacheTtl(range) {
@@ -845,7 +880,11 @@
     actorPrefetchKey = key;
     const run = ++actorPrefetchRun;
     const candidates = actorRevenueRanking(data).slice(0, ACTOR_COLOR_PALETTE.length);
-    const months = new Set((rawData?.days || []).map((day) => `${day.slice(0, 7)}-01`));
+    // Only the most recent months: a 1-year range would otherwise queue about
+    // 190 background requests ahead of everything else. Older bars stay gray
+    // until pinned, when their tooltip loads the Actors on demand.
+    const allMonths = [...new Set((rawData?.days || []).map((day) => `${day.slice(0, 7)}-01`))].sort();
+    const months = new Set(allMonths.slice(-PREFETCH_MONTHS));
     const tasks = candidates.flatMap((candidate) => {
       const activeMonths = (candidate.activeMonths || []).filter((month) => months.has(month));
       return (activeMonths.length ? activeMonths : [...months]).map((month) => ({ candidate, month, key: `${month}|${candidate.actorId}` }));
@@ -865,7 +904,9 @@
       actorDetailCache.set(task.key, { entry });
       return { task, entry };
     })).then((results) => {
-      if (run !== actorPrefetchRun || loadId !== state.loadId || key !== dataKey() || !state.data) return;
+      // Background refreshes of the same range start new loads; the colors
+      // still apply to it, so only a different range (or reset) discards them.
+      if (run !== actorPrefetchRun || key !== dataKey() || !state.data) return;
       for (const result of results) {
         if (result.status === "fulfilled") state.data.actorDetails.set(result.value.task.key, result.value.entry);
       }
@@ -919,8 +960,15 @@
     return end.toISOString().slice(0, 10) > todayIso();
   }
 
+  // A week or month cut off by the range's own start or end has fewer days
+  // than its neighbours (e.g. a "1m" range starting mid-week), so comparing it
+  // with full buckets would show a false drop.
+  function isTruncatedAtEdge(period, data) {
+    return AAPR.isTruncatedBucket(period, data.grouping || state.grouping, data.start, data.end);
+  }
+
   function completePeriods(data) {
-    return data.days.filter((period) => !isPartialPeriod(period, data.grouping));
+    return data.days.filter((period) => !isPartialPeriod(period, data.grouping) && !isTruncatedAtEdge(period, data));
   }
 
   function shortPeriodLabel(period, grouping = state.grouping) {
@@ -984,7 +1032,22 @@
     };
   }
 
+  // Insights depend only on the grouped data object, which is replaced on
+  // every load, so cache per object instead of recomputing on each poll tick.
+  const insightsCache = new WeakMap();
+
   function chartInsights(definition, data) {
+    if (!data) return null;
+    let byChart = insightsCache.get(data);
+    if (!byChart) {
+      byChart = new Map();
+      insightsCache.set(data, byChart);
+    }
+    if (!byChart.has(definition.key)) byChart.set(definition.key, computeChartInsights(definition, data));
+    return byChart.get(definition.key);
+  }
+
+  function computeChartInsights(definition, data) {
     const grouping = data.grouping || state.grouping;
     const unit = groupingLabel(grouping);
     const complete = completePeriods(data);
@@ -1797,55 +1860,150 @@
     if (event.key === "Escape" && rangeTooltipState.pinned) hideRangeTooltip();
   });
 
+  function applyRangeData(rawData, previousActorDetails) {
+    // A refresh of the same range keeps the Actor colors and tooltip rows
+    // already loaded for it.
+    const sameRange = state.data && state.loadedKey === dataKey();
+    const details = previousActorDetails || (sameRange ? state.data.actorDetails : null) || new Map();
+    state.rawData = rawData;
+    state.data = AAPR.group(rawData, state.grouping);
+    state.data.actorDetails = details;
+  }
+
+  // The last finished range is saved per account/range so a reload can paint
+  // it immediately instead of waiting for the network.
+  async function restoreSnapshot(key) {
+    try {
+      const cached = await AAP_CACHE.getView?.(RANGE_SNAPSHOT_VIEW, rangeCacheTtl(state.range), snapshotScope(key));
+      if (!cached?.hit || !Array.isArray(cached.data?.days)) return null;
+      return { data: cached.data, updatedAt: cached.updatedAt };
+    } catch {
+      return null;
+    }
+  }
+
+  function persistSnapshot(key, rawData) {
+    Promise.resolve(AAP_CACHE.setView?.(RANGE_SNAPSHOT_VIEW, rawData, snapshotScope(key))).catch(() => {});
+  }
+
+  function scheduleAdjacentPrefetch() {
+    if (adjacentPrefetched) return;
+    adjacentPrefetched = true;
+    window.AAP_INSIGHTS_NAV?.prefetchOtherTabs?.("monetization");
+  }
+
+  // Other tabs warm Monetization's current-month requests: the same URLs a
+  // range ending this month asks for first.
+  self.AAP_PREFETCH = self.AAP_PREFETCH || {};
+  self.AAP_PREFETCH.monetization = () => {
+    const month = `${currentMonth()}-01`;
+    const options = { priority: "background" };
+    return Promise.allSettled([
+      AAP_API.profitMargin(month, [], options),
+      AAP_API.runStatistics(month, [], options),
+      AAP_API.userCountStatistics(month, [], options),
+      AAP_API.costsPerThousandResults(month, [], options),
+      AAP_API.actorBreakdown(month, [], options),
+    ]);
+  };
+
   async function loadRange() {
-    if (!validRange(state.range) || !state.observedMonth) return;
+    if (!canLoad()) return;
+    const requestedKey = dataKey();
+    // Switching ranges mid-load: drop the old load's queued requests and start
+    // the new range now instead of waiting for the old one to finish.
+    if ((state.loading || state.refreshing) && requestedKey && requestedKey !== state.loadingKey) {
+      AAP_API.cancel?.(state.loadTag);
+      state.loadId++;
+      state.loading = false;
+      state.refreshing = false;
+    }
     if (state.loading || state.refreshing) return;
     await AAP_API.whenReady?.();
-    if (!validRange(state.range) || !state.observedMonth || state.loading || state.refreshing) return;
+    if (!canLoad() || state.loading || state.refreshing) return;
     const key = dataKey();
-    if (!key) return;
-    if (Date.now() < state.retryAt) return;
-    const cached = memoryCache.get(key);
+    if (!key || Date.now() < state.retryAt) return;
+    let cached = memoryCache.get(key);
+    if (!cached && !(state.data && state.loadedKey === key)) {
+      const restoreLoadId = ++state.loadId;
+      state.loading = true;
+      state.loadingKey = key;
+      cached = await restoreSnapshot(key);
+      // A newer load (e.g. a range switch) superseded this restore.
+      if (restoreLoadId !== state.loadId) return;
+      state.loading = false;
+      if (key !== dataKey()) return;
+    }
     const fresh = cached && Date.now() - cached.updatedAt < rangeCacheTtl(state.range);
-    if (cached && fresh) {
+    if (cached) {
       memoryCache.delete(key);
       memoryCache.set(key, cached);
+      while (memoryCache.size > MAX_MEMORY_CACHE_ENTRIES) memoryCache.delete(memoryCache.keys().next().value);
     }
     if (key === state.loadedKey && fresh) return;
-    const hadData = Boolean(state.data && state.loadedKey === key);
+    let hadData = Boolean(state.data && state.loadedKey === key);
     const previousActorDetails = hadData ? state.data.actorDetails : null;
+    if (cached && !hadData) {
+      // Paint the cached snapshot now; refresh it below only if it is stale.
+      applyRangeData(cached.data, null);
+      state.loadedKey = key;
+      state.error = null;
+      state.partial = cached.data.partial || null;
+      self.AAP_PERF?.mark("range.firstPaint");
+      renderRangeView(false);
+      if (fresh) {
+        startActorPrefetch(state.data, cached.data, key, state.loadId);
+        scheduleAdjacentPrefetch();
+        return;
+      }
+      hadData = true;
+    }
     state.loadedKey = key;
+    state.loadingKey = key;
     state.loading = !hadData;
     state.refreshing = hadData;
     state.error = null;
     state.partial = null;
     if (!hadData) renderRangeView();
     const loadId = ++state.loadId;
+    const tag = `range-${loadId}`;
+    state.loadTag = tag;
+    let progressed = false;
     try {
       const dates = apiDates(state.range);
-      const rawData = fresh
-        ? cached.data
-        : await AAP_API.rangeData(dates.start, dates.end, state.actorIds);
+      const rawData = await AAP_API.rangeData(dates.start, dates.end, state.actorIds, {
+        tag,
+        includePrevious: true,
+        // Draw the newest months as soon as they arrive on a cold load.
+        onProgress: hadData ? null : (progress) => {
+          if (loadId !== state.loadId || key !== dataKey()) return;
+          progressed = true;
+          applyRangeData(progress, null);
+          self.AAP_PERF?.mark("range.firstPaint");
+          renderRangeView(false);
+        },
+      });
       if (loadId !== state.loadId || key !== dataKey()) return;
       if (!rawData.partial) {
         memoryCache.delete(key);
         memoryCache.set(key, { data: rawData, updatedAt: Date.now() });
         while (memoryCache.size > MAX_MEMORY_CACHE_ENTRIES) memoryCache.delete(memoryCache.keys().next().value);
+        persistSnapshot(key, rawData);
       }
-      state.rawData = rawData;
-      state.data = AAPR.group(rawData, state.grouping);
-      // A background refresh must not discard tooltip rows that were already
-      // loaded for the same range.
-      state.data.actorDetails = previousActorDetails || new Map();
+      applyRangeData(rawData, previousActorDetails);
+      self.AAP_PERF?.mark("range.firstPaint");
+      self.AAP_PERF?.mark("range.fullPaint");
       state.partial = rawData.partial || null;
       state.retryAt = rawData.partial ? Date.now() + PARTIAL_RETRY_MS : 0;
       startActorPrefetch(state.data, rawData, key, loadId);
+      scheduleAdjacentPrefetch();
     } catch (error) {
       if (loadId !== state.loadId || key !== dataKey()) return;
+      if (error?.name === "AbortError") return;
       // Keep the last successful snapshot usable if a background refresh
       // fails. The next retry can update it without a blank loading state.
-      state.error = hadData ? null : error;
-      if (!hadData) state.loadedKey = null;
+      state.error = hadData || progressed ? null : error;
+      if (!hadData && !progressed) state.loadedKey = null;
       state.retryAt = Date.now() + 10_000;
     } finally {
       if (loadId === state.loadId && key === dataKey()) {

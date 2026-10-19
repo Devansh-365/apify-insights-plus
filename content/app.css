@@ -2513,6 +2513,19 @@ th[aria-sort="descending"] .aap-portfolio-sort {
   height: 96px;
 }
 
+/* Sparkline placeholder until its row scrolls into view and the daily
+   series loads. Same height as the drawn chart, so rows do not jump. */
+.aap-debugging-chart-pending {
+  display: flex;
+  align-items: center;
+  height: 96px;
+}
+
+/* Invisible marker after an overview table; reaching it loads the next page. */
+.aap-load-sentinel {
+  height: 1px;
+}
+
 .aap-debugging-empty,
 .aap-debugging-table-empty {
   color: var(--aap-debugging-muted);

@@ -138,4 +138,13 @@ const noComparison = model.analyze({ rowsByMonth: { "2026-10-01": october }, now
 assert.equal(noComparison.comparisonMonth, null);
 assert.equal(noComparison.counts.growing, 0);
 
+// Duplicate Actor entries within one month are merged, not summed.
+const duplicated = model.normalizeRows([
+  item("dup", { revenue: 10, cost: 1, paying: 2, runs: 5 }),
+  item("dup", { revenue: 0, cost: 0, paying: 0, runs: 0 }),
+]);
+assert.equal(duplicated.length, 1);
+assert.equal(duplicated[0].revenue, 10);
+assert.equal(duplicated[0].runs, 5);
+
 console.log("Actor portfolio analysis tests passed");

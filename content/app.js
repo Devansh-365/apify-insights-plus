@@ -34,6 +34,7 @@
   const OVERLAY_READY_CLASS = "aap-overlay-ready";
   const RANGE_MODE_CLASS = "aap-range-mode";
   const ORIGINAL_MODE_CLASS = "aap-monetization-original-mode";
+  const LEGACY_MONTH_CHART_ENABLED = false;
   const TOOLBAR_CLASS = "aap-toolbar-row";
   const PALETTE = ["#2dd4bf", "#60a5fa", "#f472b6", "#facc15", "#a78bfa", "#fb923c", "#34d399", "#f87171"];
   const UNASSIGNED_COLOR = "#6b7280";
@@ -400,6 +401,10 @@
     // hidden; this saves requests and avoids two renderers competing for the
     // same monetization canvas during the mode switch.
     if (document.documentElement.classList.contains(RANGE_MODE_CLASS)) return;
+    // app.css hides this overlay in Original mode too, so loading it there
+    // only spent request slots on a chart nobody sees. It stays dormant
+    // unless re-enabled.
+    if (!LEGACY_MONTH_CHART_ENABLED || document.documentElement.classList.contains(ORIGINAL_MODE_CLASS)) return;
     const overlay = ensureOverlay();
     if (!overlay) return;
     const key = scopeKey();

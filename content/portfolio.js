@@ -8,6 +8,7 @@
   const HOST_CLASS = "aap-portfolio";
   const ACTIVE_CLASS = "aap-portfolio-active";
   const PAGE_SIZE = 50;
+  const PREVIOUS_RETRY_MS = 60 * 1000;
   const MODEL = self.AAP_PORTFOLIO_MODEL;
 
   const ui = {
@@ -66,19 +67,24 @@
 
   // Pace needs the month before the latest month. When the range does not
   // include it, fetch that one breakdown (cached by the API layer) once.
-  function previousRowsFor(rowsByMonth) {
+  function previousRowsFor(data, rowsByMonth) {
     const months = Object.keys(rowsByMonth).sort();
     const latest = months[months.length - 1];
     if (!latest) return null;
     const previous = MODEL.previousMonthKey(latest);
     if (rowsByMonth[previous]) return null;
+    // rangeData fetches the previous month in the same batch as the range.
+    if (data?.previousBreakdownRows?.month === previous) return data.previousBreakdownRows.rows;
     const key = scopeKey(previous);
-    if (previousRowsCache.has(key)) return previousRowsCache.get(key);
+    const cached = previousRowsCache.get(key);
+    if (cached?.rows) return cached.rows;
+    // A failed fetch is retried after a minute instead of disabling pace.
+    if (cached && Date.now() - cached.failedAt < PREVIOUS_RETRY_MS) return null;
     if (!previousRowsLoading.has(key) && self.AAP_API?.actorBreakdown) {
       previousRowsLoading.add(key);
-      self.AAP_API.actorBreakdown(previous, [], { priority: "background" })
-        .then((raw) => previousRowsCache.set(key, MODEL.normalizeRows(raw)))
-        .catch(() => previousRowsCache.set(key, null))
+      self.AAP_API.actorBreakdown(previous, [], { priority: "foreground" })
+        .then((raw) => previousRowsCache.set(key, { rows: MODEL.normalizeRows(raw) }))
+        .catch(() => previousRowsCache.set(key, { failedAt: Date.now() }))
         .finally(() => {
           previousRowsLoading.delete(key);
           if (lastInput) render(lastInput.data, lastInput.context, true);
@@ -406,7 +412,8 @@
     if (!host) return;
     const body = host.querySelector(".aap-portfolio-body");
     if (!lastAnalysis) {
-      body.replaceChildren(renderLoading());
+      // Keep the running shimmer instead of rebuilding it on every poll.
+      if (!body.querySelector(".aap-portfolio-loading")) body.replaceChildren(renderLoading());
       return;
     }
     const segment = MODEL.SEGMENTS.find((item) => item.key === ui.segment);
@@ -425,8 +432,8 @@
   function render(data, context = {}, force = false) {
     if (!MODEL || !ensureHost()) return;
     const rowsByMonth = data?.actorBreakdownRows || null;
-    const previousRows = rowsByMonth ? previousRowsFor(rowsByMonth) : null;
-    if (!force && lastInput?.data === data && lastInput.previousRows === previousRows && lastAnalysis) return;
+    const previousRows = rowsByMonth ? previousRowsFor(data, rowsByMonth) : null;
+    if (!force && lastInput && lastInput.data === data && lastInput.previousRows === previousRows) return;
     lastInput = { data, context, previousRows };
     lastAnalysis = rowsByMonth ? MODEL.analyze({ rowsByMonth, previousRows }) : null;
 

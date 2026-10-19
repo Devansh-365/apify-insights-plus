@@ -52,8 +52,13 @@
     state.organization = null;
   });
 
+  // After "Clear cache", every open tab reloads; a random delay per tab keeps
+  // them from refetching at the same instant.
+  let loadBlockedUntil = 0;
+
   chrome.storage.onChanged?.addListener((changes, area) => {
     if (area !== "local" || !changes[CACHE_CLEAR_KEY]) return;
+    loadBlockedUntil = Date.now() + Math.random() * 2_000;
     state.requestId++;
     state.loading = false;
     state.detailLoading = false;
@@ -346,6 +351,30 @@
     }
   }
 
+  // Scrolling near the end of the table loads the next page of Actors.
+  let autoLoadTimer = null;
+  function autoLoadMore() {
+    if (!refs?.sentinel || state.loading || state.detailLoading || state.showOriginal || state.query.trim()) return;
+    if (state.rows.length >= state.actors.length) return;
+    if (!window.AAP_INSIGHTS_NAV?.sentinelNearViewport?.(refs.sentinel)) return;
+    loadMoreActors(false).then(() => queueAutoLoad()).catch(() => {});
+  }
+
+  function queueAutoLoad() {
+    clearTimeout(autoLoadTimer);
+    autoLoadTimer = setTimeout(autoLoadMore, 300);
+  }
+
+  self.AAP_PREFETCH = self.AAP_PREFETCH || {};
+  self.AAP_PREFETCH.acquisition = () => {
+    const month = currentCalendarMonthStartAt();
+    return Promise.allSettled([
+      AAP_API.actorList({ priority: "background" }),
+      AAP_API.acquisitionData(month, [], { priority: "background" }),
+      AAP_API.acquisitionData(previousMonthStartAt(month), [], { portionOfMonthElapsed: comparisonPortion(month), priority: "background" }),
+    ]);
+  };
+
   async function loadMoreActors(loadAll = false) {
     if (state.detailLoading || !state.actors.length || !state.monthStartAt) return;
     const requestId = state.requestId;
@@ -565,6 +594,8 @@
       refs.all.disabled = state.detailLoading;
       refs.all.textContent = state.detailLoading ? "Loading…" : "Load all Actors";
     }
+    if (!state.loading && !state.detailLoading) queueAutoLoad();
+    if (!state.loading && state.actors.length) window.AAP_INSIGHTS_NAV?.prefetchOtherTabs?.("acquisition");
   }
 
   function createHost() {
@@ -613,7 +644,10 @@
     });
     const refresh = createElement("button", "aap-acquisition-refresh", "Refresh");
     refresh.type = "button";
-    refresh.addEventListener("click", () => beginLoad(monthStartAt(), true));
+    refresh.addEventListener("click", () => {
+      AAP_API.forceFresh?.();
+      beginLoad(monthStartAt(), true);
+    });
     const more = createElement("button", "aap-acquisition-more", "Load more Actors");
     more.type = "button";
     more.addEventListener("click", () => loadMoreActors(false));
@@ -642,8 +676,11 @@
     }
     const totalSection = tableShell("All actors", "totalBody");
     const actorsSection = tableShell("Actors", "body");
-    host.append(header, controls, status, totalSection, actorsSection);
-    refs = { summary, status, more, all, totalBody: totalSection.totalBody, body: actorsSection.body };
+    const sentinel = createElement("div", "aap-load-sentinel");
+    sentinel.setAttribute("aria-hidden", "true");
+    host.append(header, controls, status, totalSection, actorsSection, sentinel);
+    window.AAP_INSIGHTS_NAV?.watchSentinel?.(sentinel, autoLoadMore);
+    refs = { summary, status, more, all, sentinel, totalBody: totalSection.totalBody, body: actorsSection.body };
     syncView();
     return host;
   }
@@ -681,7 +718,7 @@
       renderRows();
     }
     const month = monthStartAt();
-    if (state.showOriginal || !restoreSettled) return;
+    if (state.showOriginal || !restoreSettled || Date.now() < loadBlockedUntil) return;
     if (!state.requestId || state.monthStartAt !== month) { beginLoad(month, false); return; }
     if (Date.now() - state.loadedAt > refreshTtl(month)) beginLoad(month, false, true);
   }

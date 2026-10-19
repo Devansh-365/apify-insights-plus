@@ -116,5 +116,54 @@
     chrome.storage.local.remove(TOOLTIP_ACTOR_COUNT_KEY);
   });
 
+  // ---- Performance panel (debug) ------------------------------------------
+  // Each Apify tab writes a throttled snapshot of its data-layer counters to
+  // "aap.perf" (lib/perf.js); show the latest one.
+  const PERF_KEY = "aap.perf";
+  const perfBody = document.getElementById("perf-body");
+
+  function perfRow(label, value, title = "") {
+    const row = document.createElement("div");
+    row.className = "perf-row";
+    if (title) row.title = title;
+    const term = document.createElement("dt");
+    term.textContent = label;
+    const detail = document.createElement("dd");
+    detail.textContent = value;
+    row.append(term, detail);
+    return row;
+  }
+
+  function renderPerf(snapshot) {
+    if (!snapshot?.counters) return;
+    const counters = snapshot.counters;
+    const timings = snapshot.timings || {};
+    const hits = (counters["cache.hit"] || 0) + (counters["cache.staleHit"] || 0);
+    const reads = hits + (counters["cache.miss"] || 0);
+    const firstPaint = snapshot.marks?.["range.firstPaint"];
+    const probe = snapshot.headerProbe || {};
+    const etag = probe.checked ? (probe.etag ? "yes" : "no") : "unknown";
+    const avg = (name) => (timings[name] ? `${timings[name].avg} ms` : "–");
+    perfBody.replaceChildren(
+      perfRow("Page", snapshot.page || "–"),
+      perfRow("Network requests", String(counters["request.network"] || 0)),
+      perfRow("Cache hit rate", reads ? `${Math.round((hits / reads) * 100)}% of ${reads}` : "–", "Hits include stale entries shown while refreshing."),
+      perfRow("Shown stale, refreshed", String(counters["request.revalidated"] || 0)),
+      perfRow("Reused Apify responses", String(counters["tee.cached"] || 0)),
+      perfRow("Shared across tabs", String(counters["request.sharedAcrossTabs"] || 0)),
+      perfRow("Cancelled on range switch", String(counters["request.cancelled"] || 0)),
+      perfRow("Avg queue wait", avg("request.queueWaitMs")),
+      perfRow("Avg cache write", avg("cache.writeMs")),
+      perfRow("Evicted before expiry", `${counters["cache.evictedBeforeExpiry"] || 0} of ${counters["cache.evicted"] || 0}`, "Entries removed for space while still valid. Rising numbers mean the cache budget is too small."),
+      perfRow("Monetization first chart", firstPaint != null ? `${firstPaint} ms after load` : "–"),
+      perfRow("Apify sends ETag", etag, probe.cacheControl ? `Cache-Control: ${probe.cacheControl}` : ""),
+    );
+  }
+
+  chrome.storage.local.get(PERF_KEY).then((result) => renderPerf(result[PERF_KEY]));
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === "local" && changes[PERF_KEY]) renderPerf(changes[PERF_KEY].newValue);
+  });
+
   loadCacheSummary();
 })();

@@ -264,6 +264,38 @@ body {
   text-decoration: underline;
 }
 
+.perf-hint {
+  margin: 0 0 8px;
+}
+
+.perf-list {
+  margin: 0;
+}
+
+.perf-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--separator);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.perf-row:last-child {
+  border-bottom: 0;
+}
+
+.perf-row dt {
+  color: var(--text-muted);
+}
+
+.perf-row dd {
+  margin: 0;
+  color: var(--text);
+  text-align: right;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .icon-button,
   .back-button,

@@ -6,6 +6,7 @@
   const MAX_RUNS_PER_PAGE = 100;
   const ACTOR_PAGE_SIZE = 25;
   const CACHE_CLEAR_KEY = "aap.cacheClearedAt";
+  const CLEAR_JITTER_MS = 2_000;
 
   // Matches lib/api.js's cacheTtl(): current-month data settles quickly and
   // is worth re-checking every minute; historical months are effectively
@@ -61,8 +62,13 @@
     state.organization = null;
   });
 
+  // After "Clear cache", every open tab reloads; a random delay per tab keeps
+  // them from refetching at the same instant.
+  let loadBlockedUntil = 0;
+
   chrome.storage.onChanged?.addListener((changes, area) => {
     if (area !== "local" || !changes[CACHE_CLEAR_KEY]) return;
+    loadBlockedUntil = Date.now() + Math.random() * CLEAR_JITTER_MS;
     state.requestId++;
     state.contextKey = null;
     state.loading = false;
@@ -124,6 +130,18 @@
   })();
 
   const onRoute = () => ROUTE_RE.test(location.pathname);
+
+  // Warmed by other Insights tabs during idle time (see range.js): the
+  // requests this overview makes first, at background priority.
+  self.AAP_PREFETCH = self.AAP_PREFETCH || {};
+  self.AAP_PREFETCH.debugging = () => {
+    const month = currentCalendarMonthStartAt();
+    return Promise.allSettled([
+      AAP_API.actorList({ priority: "background" }),
+      AAP_API.runStatistics(month, [], { priority: "background" }),
+      AAP_API.actorBreakdown(month.slice(0, 10), [], { priority: "background" }),
+    ]);
+  };
 
   if (onRoute()) document.documentElement.classList.add(OVERVIEW_CLASS);
 
@@ -325,6 +343,88 @@
     return /^\d{4}-\d{2}-\d{2}$/.test(day) && day > today;
   }
 
+  // Monthly per-Actor run totals come with one actor-breakdown response for
+  // every Actor; the daily series for a sparkline is fetched only when its
+  // row scrolls into view.
+  function summaryStats(item) {
+    const runs = item?.runsStats || {};
+    const total = number(runs.TOTAL) ?? 0;
+    const succeeded = number(runs.SUCCEEDED) || 0;
+    return {
+      dailyStats: null,
+      summaryOnly: true,
+      total,
+      succeeded,
+      failed: Math.max(0, total - succeeded),
+      rate: total > 0 ? succeeded / total : null,
+    };
+  }
+
+  function applyBreakdown(actors, breakdown, silent) {
+    const byId = new Map((breakdown.monetizationPerActor || []).map((item) => [item?.actor?._id, item]));
+    const previous = new Map(state.rows.map((row) => [row.actor.id, row]));
+    state.rows = actors.map((actor) => {
+      const prior = previous.get(actor.id);
+      // A silent refresh keeps sparklines that are already drawn.
+      if (silent && prior?.stats && !prior.stats.summaryOnly) return prior;
+      return { actor, stats: summaryStats(byId.get(actor.id)), failed: false, loaded: true };
+    });
+    state.completed = state.rows.length;
+  }
+
+  let dailyObserver = null;
+  const dailyLoading = new Set();
+  let viewSaveTimer = null;
+
+  function scheduleViewSave() {
+    clearTimeout(viewSaveTimer);
+    const month = state.monthStartAt;
+    viewSaveTimer = setTimeout(() => {
+      if (state.selectedActorId || month !== state.monthStartAt) return;
+      AAP_CACHE.setView?.("debugging", { actors: state.actors, rows: state.rows, total: state.total }, viewScope(month));
+    }, 2_000);
+  }
+
+  function observeDaily(element, actorId) {
+    element.dataset.actorId = actorId;
+    if (typeof IntersectionObserver !== "function") {
+      loadDaily(actorId);
+      return;
+    }
+    if (!dailyObserver) {
+      dailyObserver = new IntersectionObserver((entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          dailyObserver.unobserve(entry.target);
+          loadDaily(entry.target.dataset.actorId);
+        }
+      }, { rootMargin: "300px 0px" });
+    }
+    dailyObserver.observe(element);
+  }
+
+  async function loadDaily(actorId) {
+    const month = state.monthStartAt;
+    const requestId = state.requestId;
+    const key = `${requestId}|${actorId}`;
+    if (!actorId || dailyLoading.has(key)) return;
+    dailyLoading.add(key);
+    try {
+      const raw = await AAP_API.runStatistics(month, [actorId], { priority: "foreground" });
+      if (requestId !== state.requestId || month !== state.monthStartAt) return;
+      const row = state.rows.find((item) => item.actor.id === actorId);
+      if (!row) return;
+      row.stats = statsFor(raw);
+      const existing = refs?.actorsBody?.querySelector(`tr[data-actor-id="${CSS.escape(actorId)}"]`);
+      if (existing) existing.replaceWith(chartRow(row));
+      scheduleViewSave();
+    } catch {
+      // Keep the monthly summary; the sparkline simply stays pending.
+    } finally {
+      dailyLoading.delete(key);
+    }
+  }
+
   function statsFor(raw) {
     const dailyStats = raw?.dailyStats && typeof raw.dailyStats === "object" ? raw.dailyStats : {};
     let total = 0;
@@ -491,6 +591,13 @@
       cell.appendChild(createElement("span", "aap-debugging-empty", state.loading ? "–" : "Unavailable"));
       return cell;
     }
+    if (stats.summaryOnly) {
+      cell.append(
+        createElement("strong", null, formatRate(stats.rate)),
+        createElement("small", null, `${formatInteger(stats.succeeded)} / ${formatInteger(stats.total)} succeeded`),
+      );
+      return cell;
+    }
     const values = rateEntries(stats).map((entry) => entry.rate).filter((value) => value != null);
     const lowest = values.length ? Math.min(...values) : null;
     // Only call out the worst day when it fell below the chart's 95% guide.
@@ -513,6 +620,14 @@
     const cell = createElement("td", "aap-debugging-chart-cell");
     if (!row.stats) {
       cell.appendChild(createElement("span", "aap-debugging-empty", row.failed ? "Could not load this Actor" : state.loading ? "–" : "No run data"));
+      return cell;
+    }
+    if (row.stats.summaryOnly) {
+      const pending = createElement("div", "aap-debugging-chart-pending");
+      pending.setAttribute("aria-label", `${row.actor.title} daily trend loads when visible`);
+      pending.appendChild(skeleton(0, "aap-skeleton aap-skeleton-chart"));
+      cell.appendChild(pending);
+      observeDaily(pending, row.actor.id);
       return cell;
     }
     const canvas = document.createElement("canvas");
@@ -539,6 +654,7 @@
       return tableRow;
     }
     if (row.failed) tableRow.className = "aap-debugging-row-partial";
+    if (!total && row.actor?.id) tableRow.dataset.actorId = row.actor.id;
     tableRow.append(actorCell(row.actor, total), summaryCell(row.stats), chartCell(row));
     return tableRow;
   }
@@ -634,6 +750,9 @@
 
   function renderRows() {
     if (!refs) return;
+    // Rows are rebuilt below; their pending sparklines re-register.
+    dailyObserver?.disconnect();
+    if (!state.loading && state.actors.length) window.AAP_INSIGHTS_NAV?.prefetchOtherTabs?.("debugging");
     const selected = !!state.selectedActorId;
     if (refs.refresh) refs.refresh.disabled = state.loading || state.runsLoading;
     if (refs.sort) refs.sort.hidden = selected;
@@ -741,7 +860,10 @@
     });
     const refresh = createElement("button", "aap-debugging-refresh", "Refresh");
     refresh.type = "button";
-    refresh.addEventListener("click", () => beginLoad(currentMonthStartAt(), currentActorId(), true));
+    refresh.addEventListener("click", () => {
+      AAP_API.forceFresh?.();
+      beginLoad(currentMonthStartAt(), currentActorId(), true);
+    });
     const more = createElement("button", "aap-debugging-more", "Load more Actors");
     more.type = "button";
     more.addEventListener("click", () => loadMoreActors(false));
@@ -857,7 +979,7 @@
     const month = currentMonthStartAt();
     const actor = currentActorId();
     const key = contextKey(month, actor);
-    if (state.showOriginal || !restoreSettled) return;
+    if (state.showOriginal || !restoreSettled || Date.now() < loadBlockedUntil) return;
     if (key !== state.contextKey) { beginLoad(month, actor, false); return; }
     // Periodic silent refresh only applies to the account-wide overview: a
     // background refresh of the selected-Actor run list would reset its
@@ -899,6 +1021,9 @@
       // The native no-filter chart is backed by this single account-wide
       // request. Start it before waiting for the Actor list so its chart can
       // appear immediately instead of being held up by per-Actor discovery.
+      const breakdownTask = actor
+        ? Promise.resolve(null)
+        : AAP_API.actorBreakdown(String(monthStartAt).slice(0, 10), [], { priority: "foreground" }).catch(() => null);
       const totalTask = actor
         ? Promise.resolve()
         : AAP_API.runStatistics(monthStartAt, [])
@@ -936,12 +1061,21 @@
           state.rows = actors.slice(0, ACTOR_PAGE_SIZE).map(placeholderRow);
           renderRows();
         }
-        const actorsToLoad = silent
-          ? state.rows.filter((row) => row.loaded).map((row) => row.actor)
-          : actors.slice(0, ACTOR_PAGE_SIZE);
-        await loadOverviewActors(actorsToLoad, monthStartAt, requestId, silent);
+        const breakdown = await breakdownTask;
+        if (requestId !== state.requestId) return;
+        if (breakdown?.monetizationPerActor) {
+          // One request covers every Actor's monthly totals.
+          applyBreakdown(actors, breakdown, silent);
+          if (!silent) renderRows();
+        } else {
+          const actorsToLoad = silent
+            ? state.rows.filter((row) => row.loaded).map((row) => row.actor)
+            : actors.slice(0, ACTOR_PAGE_SIZE);
+          await loadOverviewActors(actorsToLoad, monthStartAt, requestId, silent);
+        }
         await totalTask;
         if (requestId !== state.requestId) return;
+        AAP_CACHE.setView?.("debugging", { actors: state.actors, rows: state.rows, total: state.total }, viewScope(monthStartAt));
       }
     } catch (error) {
       if (requestId === state.requestId && !silent) state.error = `Couldn't load debugging data${error?.message ? `: ${error.message}` : "."}`;

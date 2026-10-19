@@ -38,6 +38,7 @@
         "https://www.apify.com/*"
       ],
       "js": [
+        "lib/perf.js",
         "lib/context.js",
         "lib/format.js",
         "lib/range.js",

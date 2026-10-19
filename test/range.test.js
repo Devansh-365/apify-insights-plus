@@ -158,4 +158,12 @@ assert.equal(monthly.runsSummary.maximum, 4);
 assert.equal(monthly.resultsSummary.average, 5.5);
 assert.equal(monthly.costsSummary.minimum, 0.25);
 
+// Buckets cut by the range edges are partial (false trends otherwise).
+assert.equal(context.self.AAPR.isTruncatedBucket("2026-09-14", "week", "2026-09-19", "2026-10-18"), true, "week starting before the range start");
+assert.equal(context.self.AAPR.isTruncatedBucket("2026-09-21", "week", "2026-09-19", "2026-10-18"), false, "full week inside the range");
+assert.equal(context.self.AAPR.isTruncatedBucket("2026-10-12", "week", "2026-09-19", "2026-10-16"), true, "week running past the range end");
+assert.equal(context.self.AAPR.isTruncatedBucket("2026-01-01", "month", "2026-01-15", "2026-03-31"), true, "month starting before the range start");
+assert.equal(context.self.AAPR.isTruncatedBucket("2026-02-01", "month", "2026-01-15", "2026-03-31"), false, "full month");
+assert.equal(context.self.AAPR.isTruncatedBucket("2026-03-01", "month", "2026-01-15", "2026-03-20"), true, "month cut by the range end");
+assert.equal(context.self.AAPR.isTruncatedBucket("2026-01-01", "day", "2026-01-15", "2026-03-20"), false, "days are never truncated");
 console.log("range aggregation tests passed");
