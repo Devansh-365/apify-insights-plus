@@ -1,102 +1,92 @@
-/* Replaces the empty Actor-quality landing state with an account-wide table. */
+/*
+ * Replaces the empty Actor-quality landing state with an account-wide quality
+ * inbox and table. One scan fetches every Actor's scores and suggestions,
+ * busiest Actors first, and is saved so the next visit paints instantly.
+ */
 (function () {
   const ROUTE_RE = /^(?:\/organization\/[^/]+)?\/actors\/insights\/actor-quality\/?$/;
   const OVERVIEW_CLASS = "aap-quality-overview-page";
   const HOST_CLASS = "aap-quality-overview";
-  const ACTOR_PAGE_SIZE = 25;
   const CACHE_CLEAR_KEY = "aap.cacheClearedAt";
+  const LIFECYCLE_PREFIX = "aap.qualityLifecycle:";
+  const SNAPSHOT_VIEW = "quality-inbox";
+  const PREVIOUS_VIEW = "quality-inbox-prev";
+  // The busiest Actors are fetched at foreground priority and painted one by
+  // one; the long tail runs in the background and paints in batches.
+  const FOREGROUND_ACTORS = 50;
+  const PERSIST_EVERY = 25;
+  // Score changes compare against a scan at least this old, so a manual
+  // refresh minutes after the last scan does not erase yesterday's baseline.
+  const BASELINE_MIN_AGE_MS = 20 * 60 * 60 * 1000;
+  const SCAN_RETRY_MS = 5 * 60 * 1000;
+  const VIEW_STORE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
-  // Quality scores/recommendations rarely change; re-check them on the same
-  // cadence as Monetization's breakdown reindex so a long-open tab doesn't
-  // show numbers from whenever it was first opened.
-  const QUALITY_REFRESH_TTL_MS = 15 * 60 * 1000;
+  const MODEL = self.AAP_QUALITY_INBOX;
+  const VIEW = self.AAP_QUALITY_INBOX_VIEW;
 
+  const initialParams = new URLSearchParams(location.search);
   const state = {
-    actors: [],
-    rows: [],
+    view: initialParams.get("qView") === "table" ? "table" : "inbox",
+    // The inbox entry in view: an issue key ("ops:RELIABILITY"), "changes",
+    // or "hidden". null means the highest-impact issue.
+    selection: initialParams.get("qIssue") || null,
     query: "",
     suggestionFilter: "all",
-    sort: "quality",
+    workType: "all",
+    sort: "impact",
     direction: "desc",
     showOriginal: false,
-    loading: false,
+    expandedIssues: new Set(),
+    highlightActor: initialParams.get("qActor") || null,
+    scope: null,
+    restoring: false,
+    snapshot: MODEL.emptySnapshot(),
+    previous: null,
+    lifecycle: {},
+    scan: { running: false, background: false, total: 0, done: 0, failed: 0 },
+    scanAttemptAt: 0,
     error: null,
-    completed: 0,
-    detailLoading: false,
     requestId: 0,
-    loadedAt: 0,
-    organization: null,
+    scanTag: null,
   };
 
   let host = null;
   let refs = null;
   let pageThemeSignature = "";
   let qualityTooltip = null;
-
-  AAP_API.onTokenChange?.(() => {
-    // A tab can stay open while the user logs out or switches accounts. Do
-    // not keep showing the previous account's quality data in that case.
-    state.requestId = 0;
-    state.loading = false;
-    state.detailLoading = false;
-    state.error = null;
-    state.actors = [];
-    state.rows = [];
-    state.completed = 0;
-    state.loadedAt = 0;
-    state.organization = null;
-  });
+  let renderTimer = null;
 
   // After "Clear cache", every open tab reloads; a random delay per tab keeps
   // them from refetching at the same instant.
   let loadBlockedUntil = 0;
 
+  function resetScope() {
+    if (state.scanTag) AAP_API.cancel?.(state.scanTag);
+    state.requestId++;
+    state.scanTag = null;
+    state.scope = null;
+    state.restoring = false;
+    state.snapshot = MODEL.emptySnapshot();
+    state.previous = null;
+    state.lifecycle = {};
+    state.scan = { running: false, background: false, total: 0, done: 0, failed: 0 };
+    state.scanAttemptAt = 0;
+    state.error = null;
+  }
+
+  // A tab can stay open while the user logs out or switches accounts. Do not
+  // keep showing the previous account's quality data in that case.
+  AAP_API.onTokenChange?.(() => {
+    resetScope();
+    render();
+  });
+
   chrome.storage.onChanged?.addListener((changes, area) => {
     if (area !== "local" || !changes[CACHE_CLEAR_KEY]) return;
     loadBlockedUntil = Date.now() + Math.random() * 2_000;
-    state.requestId++;
-    state.loading = false;
-    state.detailLoading = false;
-    state.error = null;
-    state.actors = [];
-    state.rows = [];
-    state.completed = 0;
-    state.loadedAt = 0;
-    state.organization = null;
-    renderRows();
+    resetScope();
+    render();
   });
-
-  // A closed-and-reopened tab loses all in-memory state, so on a fresh page
-  // load there is otherwise no way to avoid a full reload even for data that
-  // was just fetched a minute ago. Paint the last durably-cached table
-  // immediately, then let ensureHost()'s normal TTL/silent-refresh path (see
-  // beginLoad()) decide whether to quietly bring it up to date.
-  //
-  // ensureHost() waits on restoreSettled before it will trigger a load.
-  // Without this, its 400ms poll starts firing as soon as the page's DOM
-  // exists, which is usually faster than AAP_API.whenReady() below (that
-  // needs the page to make its own first authenticated request) - so the
-  // poll would reliably win the race and call beginLoad() for real before
-  // this restore ever got to check the durable cache.
-  let restoreSettled = false;
-  (async () => {
-    try {
-      await AAP_API.whenReady?.();
-      if (state.requestId) return;
-      const cached = await AAP_CACHE.getView("quality", QUALITY_REFRESH_TTL_MS, viewScope());
-      if (!cached.hit || state.requestId) return;
-      state.organization = organizationScope();
-      state.actors = cached.data.actors || [];
-      state.rows = cached.data.rows || [];
-      state.requestId = 1;
-      state.loadedAt = cached.updatedAt;
-      renderRows();
-    } catch {
-      // Best effort only; ensureHost() still triggers a normal load either way.
-    } finally {
-      restoreSettled = true;
-    }
-  })();
 
   function onOverviewRoute() {
     return ROUTE_RE.test(location.pathname) && !new URLSearchParams(location.search).has("actorId");
@@ -192,204 +182,275 @@
       .filter((actor) => actor.id && !seen.has(actor.id) && seen.add(actor.id));
   }
 
-  function settledValue(result, fallback) {
+  function actorHref(actor) {
+    return `${location.pathname}?actorId=${encodeURIComponent(actor.id)}`;
+  }
+
+  function currentMonthKey(now = Date.now()) {
+    return `${new Date(now).toISOString().slice(0, 7)}-01`;
+  }
+
+  // ---- Persistence ----------------------------------------------------------
+
+  function lifecycleStorageKey(scope) {
+    return `${LIFECYCLE_PREFIX}${scope}`;
+  }
+
+  function persistSnapshot() {
+    if (!state.scope) return;
+    AAP_CACHE.setView?.(SNAPSHOT_VIEW, state.snapshot, state.scope);
+  }
+
+  // Lifecycle state lives outside the cache so eviction or "Clear cache"
+  // never brings back a suggestion the user dismissed.
+  function persistLifecycle() {
+    if (!state.scope) return;
+    chrome.storage.local.set({ [lifecycleStorageKey(state.scope)]: state.lifecycle }).catch?.(() => {});
+  }
+
+  async function restore(scope) {
+    state.restoring = true;
+    const requestId = state.requestId;
+    try {
+      const [snapshot, previous, stored] = await Promise.all([
+        AAP_CACHE.getView?.(SNAPSHOT_VIEW, VIEW_STORE_TTL_MS, scope),
+        AAP_CACHE.getView?.(PREVIOUS_VIEW, VIEW_STORE_TTL_MS, scope),
+        chrome.storage.local.get(lifecycleStorageKey(scope)).catch(() => ({})),
+      ]);
+      if (requestId !== state.requestId) return;
+      if (snapshot?.hit) state.snapshot = MODEL.restoreSnapshot(snapshot.data);
+      if (previous?.hit && previous.data?.scores) state.previous = previous.data;
+      const lifecycle = stored?.[lifecycleStorageKey(scope)];
+      state.lifecycle = lifecycle && typeof lifecycle === "object" ? lifecycle : {};
+    } catch {
+      // Restoring is best effort; a scan rebuilds everything.
+    } finally {
+      if (requestId === state.requestId) {
+        state.restoring = false;
+        render();
+        maybeScan();
+      }
+    }
+  }
+
+  // ---- Scan -----------------------------------------------------------------
+
+  function snapshotIsFresh(now = Date.now()) {
+    return state.snapshot.complete && now - state.snapshot.scannedAt < MODEL.ENTRY_FRESH_MS;
+  }
+
+  function maybeScan() {
+    if (!state.scope || state.restoring || state.scan.running || state.showOriginal) return;
+    if (Date.now() < loadBlockedUntil || Date.now() - state.scanAttemptAt < SCAN_RETRY_MS) return;
+    if (snapshotIsFresh()) return;
+    // A stale complete snapshot is refetched in full; an incomplete one
+    // resumes where it stopped.
+    const stale = state.snapshot.complete;
+    startScan({ force: stale, fresh: stale, background: state.snapshot.actors.length > 0 });
+  }
+
+  // Loads the Actor list and last/this month's actor-breakdown, then ranks
+  // Actors so the busiest are scanned (and listed) first.
+  async function loadContext(options) {
+    const now = Date.now();
+    const month = currentMonthKey(now);
+    const previousMonth = self.AAP_PORTFOLIO_MODEL?.previousMonthKey?.(month);
+    const normalizeRows = self.AAP_PORTFOLIO_MODEL?.normalizeRows || (() => []);
+    const breakdown = (value) => value
+      ? AAP_API.actorBreakdown(value, [], options).then(normalizeRows).catch(() => null)
+      : Promise.resolve(null);
+    const [rawActors, previousRows, currentRows] = await Promise.all([
+      AAP_API.actorList(options),
+      breakdown(previousMonth),
+      breakdown(month),
+    ]);
+    const traffic = MODEL.trafficFromRows(previousRows || [], currentRows || []);
+    return { actors: MODEL.rankActors(normalizeActors(rawActors), traffic, now), traffic };
+  }
+
+  function settled(result, fallback) {
     return result.status === "fulfilled" ? result.value : fallback;
   }
 
-  async function loadActor(actor) {
+  function cancelledError(results) {
+    return results.find((result) => result.status === "rejected" && /cancelled/i.test(result.reason?.message || ""));
+  }
+
+  async function fetchActor(actor, options) {
     const results = await Promise.allSettled([
-      AAP_API.actorQualityScores(actor.id, { priority: "foreground" }),
-      AAP_API.actorQualityRecommendations(actor.id, { priority: "foreground" }),
-      AAP_API.actorQualityBusinessValue(actor.id, { priority: "foreground" }),
-      AAP_API.actorMetrics(actor.id, { priority: "foreground" }),
+      AAP_API.actorQualityScores(actor.id, options),
+      AAP_API.actorQualityRecommendations(actor.id, options),
+      AAP_API.actorQualityBusinessValue(actor.id, options),
     ]);
+    const cancelled = cancelledError(results);
+    if (cancelled) throw cancelled.reason;
     return {
-      actor,
-      scores: settledValue(results[0], null),
-      recommendations: settledValue(results[1], null),
-      businessValue: settledValue(results[2], []),
-      metrics: settledValue(results[3], null),
+      scores: settled(results[0], null),
+      recommendations: settled(results[1], null),
+      businessValue: settled(results[2], null),
       failed: results.some((result) => result.status === "rejected"),
-      loaded: true,
     };
   }
 
-  async function loadActorRows(actors, requestId, silent) {
-    const completedBefore = state.completed;
-    const rows = await AAP_API.pooled(
-      actors,
-      async (actor) => {
-        try {
-          return await loadActor(actor);
-        } catch {
-          return { actor, scores: null, recommendations: null, businessValue: [], metrics: null, failed: true, loaded: true };
-        }
-      },
-      (completed) => {
-        if (requestId !== state.requestId || silent) return;
-        state.completed = completedBefore + completed;
-        renderRows();
-      },
-      { priority: silent ? "background" : "foreground" },
-    );
-    return rows.map((row, index) => row || {
-      actor: actors[index],
-      scores: null,
-      recommendations: null,
-      businessValue: [],
-      metrics: null,
-      failed: true,
-      loaded: true,
-    });
-  }
+  async function startScan({ force = false, fresh = false, background = false } = {}) {
+    if (state.scan.running) return;
+    const requestId = ++state.requestId;
+    const tag = `quality-scan-${requestId}`;
+    const scope = state.scope;
+    state.scanTag = tag;
+    state.scanAttemptAt = Date.now();
+    state.error = null;
+    state.scan = { running: true, background, total: 0, done: 0, failed: 0 };
+    render();
 
-  function placeholderRow(actor) {
-    return { actor, scores: null, recommendations: null, businessValue: [], metrics: null, failed: false, loaded: false, loading: true };
-  }
+    const startedFrom = state.snapshot;
+    // The scan that just finished becomes the comparison baseline, unless the
+    // current baseline is recent (a refresh right after a scan keeps the
+    // older baseline so its score changes stay visible).
+    const baseline = startedFrom.complete
+      && (!state.previous || startedFrom.scannedAt - state.previous.capturedAt >= BASELINE_MIN_AGE_MS)
+      ? { capturedAt: startedFrom.scannedAt, scores: MODEL.scoresMap(startedFrom) }
+      : null;
+    // Until one scan has completed in this scope, suggestions are backdated
+    // rather than flagged New, even if the first scan was interrupted.
+    const firstScan = !startedFrom.scannedAt;
 
-  function mergeRows(rows) {
-    const byId = new Map(state.rows.map((row) => [row.actor.id, row]));
-    for (const row of rows || []) byId.set(row.actor.id, row);
-    state.rows = state.actors.filter((actor) => byId.has(actor.id)).map((actor) => byId.get(actor.id));
-  }
-
-  function ensureRows(actors) {
-    const existing = new Set(state.rows.map((row) => row.actor.id));
-    state.rows.push(...actors.filter((actor) => !existing.has(actor.id)).map(placeholderRow));
-    const order = new Map(state.actors.map((actor, index) => [actor.id, index]));
-    state.rows.sort((left, right) => order.get(left.actor.id) - order.get(right.actor.id));
-  }
-
-  function actorMatches(actor, query) {
-    return `${actor.title} ${actor.name} ${actor.username}`.toLowerCase().includes(query.trim().toLowerCase());
-  }
-
-  async function loadActors(actors, requestId, silent = false) {
-    if (!actors.length || state.detailLoading) return;
-    state.detailLoading = true;
-    ensureRows(actors);
-    if (!silent) renderRows();
     try {
-      const rows = await loadActorRows(actors, requestId, silent);
+      const context = await loadContext({ priority: "foreground", tag, fresh });
       if (requestId !== state.requestId) return;
-      mergeRows(rows);
-      AAP_CACHE.setView?.("quality", { actors: state.actors, rows: state.rows }, viewScope());
+      const now = Date.now();
+      const snapshot = {
+        ...state.snapshot,
+        startedAt: force || !state.snapshot.startedAt ? now : state.snapshot.startedAt,
+        complete: false,
+        actors: context.actors,
+        traffic: context.traffic,
+        entries: { ...state.snapshot.entries },
+      };
+      state.snapshot = snapshot;
+      const plan = MODEL.planScan(context.actors, snapshot, now, { force });
+      state.scan.total = plan.length;
+      render();
+
+      let sincePersist = 0;
+      const onActor = async (actor, priority) => {
+        const result = await fetchActor(actor, { priority, tag, fresh });
+        if (requestId !== state.requestId) return;
+        const previousEntry = snapshot.entries[actor.id];
+        const entry = MODEL.compactEntry(actor, result, Date.now());
+        // A failed fetch keeps the last good data instead of blanking it.
+        snapshot.entries[actor.id] = entry.failed && previousEntry && !previousEntry.failed
+          ? { ...previousEntry, failed: true }
+          : entry;
+        state.scan.done++;
+        if (entry.failed) state.scan.failed++;
+        if (++sincePersist >= PERSIST_EVERY) {
+          sincePersist = 0;
+          persistSnapshot();
+        }
+        scheduleRender(priority === "foreground" ? 0 : 400);
+      };
+
+      const segments = [
+        [plan.slice(0, FOREGROUND_ACTORS), "foreground"],
+        [plan.slice(FOREGROUND_ACTORS), "background"],
+      ];
+      for (const [actors, priority] of segments) {
+        if (!actors.length) continue;
+        await AAP_API.pooled(actors, (actor) => onActor(actor, priority), { priority });
+        if (requestId !== state.requestId) return;
+        state.lifecycle = MODEL.reconcileLifecycle(state.lifecycle, snapshot, Date.now(), { firstScan });
+        persistLifecycle();
+        persistSnapshot();
+        render();
+      }
+
+      if (requestId !== state.requestId) return;
+      const finishedAt = Date.now();
+      const ids = new Set(context.actors.map((actor) => actor.id));
+      for (const id of Object.keys(snapshot.entries)) if (!ids.has(id)) delete snapshot.entries[id];
+      snapshot.complete = true;
+      snapshot.scannedAt = finishedAt;
+      state.lifecycle = MODEL.reconcileLifecycle(state.lifecycle, snapshot, finishedAt, { firstScan, complete: true, actorIds: [...ids] });
+      persistLifecycle();
+      if (baseline && Object.keys(baseline.scores).length) {
+        state.previous = baseline;
+        AAP_CACHE.setView?.(PREVIOUS_VIEW, baseline, scope);
+      }
+      persistSnapshot();
+    } catch (error) {
+      if (requestId !== state.requestId) return;
+      if (!/cancelled/i.test(error?.message || "")) {
+        state.error = `Couldn't load Actor quality data${error?.message ? `: ${error.message}` : "."}`;
+      }
+      persistSnapshot();
     } finally {
       if (requestId === state.requestId) {
-        state.detailLoading = false;
-        renderRows();
+        state.scan = { ...state.scan, running: false };
+        state.scanTag = null;
+        render();
       }
     }
   }
 
-  // Scrolling near the end of the table loads the next page of Actors.
-  let autoLoadTimer = null;
-  function autoLoadMore() {
-    if (!refs?.sentinel || state.loading || state.detailLoading || state.showOriginal || state.query.trim()) return;
-    if (state.rows.length >= state.actors.length) return;
-    if (!window.AAP_INSIGHTS_NAV?.sentinelNearViewport?.(refs.sentinel)) return;
-    loadMoreActors(false).then(() => queueAutoLoad()).catch(() => {});
+  function retryFailed() {
+    state.scanAttemptAt = 0;
+    startScan({ force: false, fresh: true, background: true });
   }
 
-  function queueAutoLoad() {
-    clearTimeout(autoLoadTimer);
-    autoLoadTimer = setTimeout(autoLoadMore, 300);
+  function refresh() {
+    if (state.scanTag) AAP_API.cancel?.(state.scanTag);
+    state.requestId++;
+    state.scan = { running: false, background: false, total: 0, done: 0, failed: 0 };
+    AAP_API.forceFresh?.();
+    startScan({ force: true, fresh: true, background: Object.keys(state.snapshot.entries).length > 0 });
   }
 
-  self.AAP_PREFETCH = self.AAP_PREFETCH || {};
-  self.AAP_PREFETCH.quality = () => AAP_API.actorList({ priority: "background" });
+  // ---- Lifecycle actions ------------------------------------------------------
 
-  async function loadMoreActors(loadAll = false) {
-    if (state.detailLoading || !state.actors.length) return;
-    const requestId = state.requestId;
-    const loadedIds = new Set(state.rows.map((row) => row.actor.id));
-    const remaining = state.actors.filter((actor) => !loadedIds.has(actor.id));
-    if (!remaining.length) return;
-    if (loadAll) {
-      for (let index = 0; index < remaining.length; index += ACTOR_PAGE_SIZE) {
-        if (requestId !== state.requestId) return;
-        await loadActors(remaining.slice(index, index + ACTOR_PAGE_SIZE), requestId);
-      }
-    } else {
-      await loadActors(remaining.slice(0, ACTOR_PAGE_SIZE), requestId);
-    }
+  function onAction(id, improvementId, action) {
+    state.lifecycle = MODEL.applyAction(state.lifecycle, id, improvementId, action, Date.now());
+    persistLifecycle();
+    render();
   }
 
-  async function loadSearchMatches() {
-    if (state.detailLoading || !state.query.trim() || !state.actors.length) return;
-    const loadedIds = new Set(state.rows.map((row) => row.actor.id));
-    const matches = state.actors.filter((actor) => actorMatches(actor, state.query) && !loadedIds.has(actor.id));
-    if (matches.length) await loadActors(matches, state.requestId);
+  // ---- URL state --------------------------------------------------------------
+
+  function writeUrlState() {
+    const url = new URL(location.href);
+    if (state.view === "table") url.searchParams.set("qView", "table");
+    else url.searchParams.delete("qView");
+    if (state.selection) url.searchParams.set("qIssue", state.selection);
+    else url.searchParams.delete("qIssue");
+    if (url.href !== location.href) history.replaceState(history.state, "", url.href);
   }
 
-  function recommendationItems(row, key) {
-    const value = row?.recommendations?.[key];
-    return Array.isArray(value) ? value : [];
+  function selectEntry(selection) {
+    state.selection = selection;
+    writeUrlState();
+    render();
+    host?.querySelector(".aap-quality-inbox-detail")?.scrollIntoView({ block: "nearest" });
   }
 
-  function businessValueItems(row) {
-    const value = row?.businessValue;
-    if (Array.isArray(value)) return value;
-    return Array.isArray(value?.improvements) ? value.improvements : [];
+  // ---- Shared derivations -------------------------------------------------------
+
+  function actors() {
+    return state.snapshot.actors;
   }
 
-  function improvements(row) {
-    const seen = new Set();
-    return [...recommendationItems(row, "improvements"), ...businessValueItems(row)].filter((item) => {
-      const key = item?.id || item?.title;
-      if (!key || seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
+  function scannedCount() {
+    return actors().filter((actor) => state.snapshot.entries[actor.id]).length;
   }
 
-  function praises(row) {
-    return recommendationItems(row, "praises");
+  function runsFor(actor) {
+    const traffic = state.snapshot.traffic[actor.id];
+    return Math.max(traffic?.current?.runs || 0, 0);
   }
+
+  // ---- Table ------------------------------------------------------------------
 
   function number(value) {
     return typeof value === "number" && Number.isFinite(value) ? value : null;
-  }
-
-  function qualityScore(row) {
-    return number(row?.scores?.actorQuality);
-  }
-
-  function sortRows(rows) {
-    return rows.sort((a, b) => {
-      const actorA = a.actor;
-      const actorB = b.actor;
-      let result = 0;
-      if (state.sort === "name") {
-        result = actorA.title.localeCompare(actorB.title);
-      } else if (state.sort === "improvements") {
-        result = improvements(a).length - improvements(b).length;
-      } else if (state.sort === "runs") {
-        result = (number(a.metrics?.publicActorRunStats30Days?.TOTAL) || 0) - (number(b.metrics?.publicActorRunStats30Days?.TOTAL) || 0);
-      } else if (state.sort === "users") {
-        result = (number(a.metrics?.totalUsers) || 0) - (number(b.metrics?.totalUsers) || 0);
-      } else {
-        result = (qualityScore(a) || -1) - (qualityScore(b) || -1);
-      }
-      return (result * (state.direction === "asc" ? 1 : -1)) || actorA.title.localeCompare(actorB.title);
-    });
-  }
-
-  function filteredRows() {
-    const query = state.query.trim().toLowerCase();
-    const rows = state.rows.filter((row) => {
-      const suggestionCount = improvements(row).length;
-      if (state.suggestionFilter === "with" && suggestionCount === 0) return false;
-      if (state.suggestionFilter === "without" && suggestionCount > 0) return false;
-      if (!query) return true;
-      const suggestions = improvements(row).map((item) => item.title || "").join(" ");
-      return `${row.actor.title} ${row.actor.name} ${suggestions}`.toLowerCase().includes(query);
-    });
-    return sortRows(rows);
-  }
-
-  function loadedActorCount() {
-    return state.rows.filter((row) => row.loaded).length;
   }
 
   function formatInteger(value) {
@@ -402,8 +463,7 @@
 
   function formatPercentile(value) {
     if (value == null) return "–";
-    const rounded = (value * 100).toFixed(1);
-    return `${rounded}th percentile`;
+    return `${(value * 100).toFixed(1)}th percentile`;
   }
 
   function plainText(value) {
@@ -437,20 +497,125 @@
     if (qualityTooltip) qualityTooltip.style.display = "none";
   }
 
-  function insightsCell(items, emptyText, className) {
-    const cell = createElement("td", className);
+  // One row per Actor, joined with its scan entry, lifecycle summary, traffic
+  // and a relative impact level (top fifth High, next 30% Medium).
+  function tableRows(now) {
+    const rows = actors().map((actor) => {
+      const summary = MODEL.actorSummary(actor, state.snapshot, state.lifecycle, state.snapshot.traffic, now);
+      return {
+        actor,
+        entry: summary.entry,
+        summary,
+        traffic: state.snapshot.traffic[actor.id],
+        revenue: MODEL.revenueForRanking(state.snapshot.traffic[actor.id], now),
+        success: MODEL.successRate(state.snapshot.traffic[actor.id]),
+      };
+    });
+    const ranked = rows.filter((row) => row.summary.open.length && row.summary.impact > row.summary.open.length).sort((left, right) => right.summary.impact - left.summary.impact);
+    const high = Math.ceil(ranked.length * 0.2);
+    const medium = Math.ceil(ranked.length * 0.5);
+    ranked.forEach((row, index) => {
+      row.level = index < high ? "high" : index < medium ? "medium" : "low";
+    });
+    for (const row of rows) row.level = row.level || (row.summary.open.length ? "low" : null);
+    return rows;
+  }
+
+  function sortValue(row) {
+    if (state.sort === "name") return row.actor.title.toLowerCase();
+    if (state.sort === "quality") return number(row.entry?.scores?.actorQuality) ?? -1;
+    if (state.sort === "improvements") return row.summary.open.length;
+    if (state.sort === "revenue") return row.revenue.value;
+    if (state.sort === "runs") return runsFor(row.actor);
+    return row.summary.impact;
+  }
+
+  function filteredRows(rows) {
+    const query = state.query.trim().toLowerCase();
+    const filtered = rows.filter((row) => {
+      const count = row.summary.open.length;
+      if (state.suggestionFilter === "with" && count === 0) return false;
+      if (state.suggestionFilter === "without" && count > 0) return false;
+      if (state.workType !== "all" && !row.summary.groups.includes(state.workType)) return false;
+      if (!query) return true;
+      const suggestions = row.summary.open.map((item) => `${item.title} ${item.id}`).join(" ");
+      return `${row.actor.title} ${row.actor.name} ${suggestions}`.toLowerCase().includes(query);
+    });
+    const direction = state.direction === "asc" ? 1 : -1;
+    return filtered.sort((left, right) => {
+      const a = sortValue(left);
+      const b = sortValue(right);
+      const result = typeof a === "string" ? a.localeCompare(b) : a - b;
+      return (result * direction) || left.actor.title.localeCompare(right.actor.title);
+    });
+  }
+
+  function actorCell(actor, total) {
+    const cell = createElement("td", "aap-quality-actor-cell");
+    if (total) {
+      const text = createElement("span", "aap-quality-actor-name");
+      text.append(createElement("strong", null, "All actors"), createElement("small", null, "Account total"));
+      cell.appendChild(text);
+      return cell;
+    }
+    const link = document.createElement("a");
+    link.className = "aap-quality-actor-link";
+    link.href = actorHref(actor);
+    link.title = "Open Apify's detailed Actor quality view";
+    if (actor.pictureUrl) {
+      const image = document.createElement("img");
+      image.src = actor.pictureUrl;
+      image.alt = "";
+      image.loading = "lazy";
+      link.appendChild(image);
+    }
+    const text = createElement("span", "aap-quality-actor-name");
+    text.append(createElement("strong", null, actor.title), createElement("small", null, actor.name));
+    link.appendChild(text);
+    cell.appendChild(link);
+    return cell;
+  }
+
+  function qualityCell(score, detail, failed) {
+    const cell = createElement("td", "aap-quality-score");
+    if (score == null) {
+      cell.appendChild(createElement("span", "aap-quality-empty", failed ? "Unavailable" : "–"));
+      return cell;
+    }
+    const meter = createElement("span", "aap-quality-meter");
+    const fill = createElement("span", "aap-quality-meter-fill");
+    fill.style.width = `${Math.max(0, Math.min(100, score * 100))}%`;
+    meter.appendChild(fill);
+    cell.append(createElement("strong", null, formatPercent(score)), meter, createElement("small", null, detail));
+    return cell;
+  }
+
+  function setupCell(scores) {
+    const cell = createElement("td", "aap-quality-setup");
+    const badges = createElement("span", "aap-quality-setup-list");
+    for (const [label, present] of [["Input", scores?.hasInputSchema], ["Output", scores?.hasOutputSchema], ["README", scores?.hasReadme]]) {
+      const badge = createElement("span", `aap-quality-badge ${present ? "aap-quality-badge-good" : "aap-quality-badge-missing"}`, label);
+      badge.title = present ? `${label} available` : `${label} missing`;
+      badges.appendChild(badge);
+    }
+    cell.appendChild(badges);
+    return cell;
+  }
+
+  function suggestionsCell(row) {
+    const cell = createElement("td", "aap-quality-insights aap-quality-improvements");
+    const items = row.summary.open;
     if (!items.length) {
-      cell.appendChild(createElement("span", "aap-quality-empty", emptyText));
+      cell.appendChild(createElement("span", "aap-quality-empty", row.entry?.improvements ? "None" : "–"));
       return cell;
     }
     const list = createElement("span", "aap-quality-insight-list");
     items.forEach((item, index) => {
-      const title = item.title || "Untitled";
-      const description = plainText(item.description);
-      const insight = createElement("span", "aap-quality-insight-item", title);
+      const description = plainText(item.detail || item.description);
+      const insight = createElement("span", "aap-quality-insight-item", item.title);
       if (description) {
         insight.tabIndex = 0;
-        insight.setAttribute("aria-label", `${title}: ${description}`);
+        insight.setAttribute("aria-label", `${item.title}: ${description}`);
         insight.setAttribute("aria-describedby", "aap-quality-tooltip");
         insight.addEventListener("mouseenter", () => showQualityTooltip(insight, description));
         insight.addEventListener("mouseleave", hideQualityTooltip);
@@ -461,135 +626,28 @@
       if (index < items.length - 1) list.appendChild(createElement("span", "aap-quality-insight-separator", " · "));
     });
     cell.appendChild(list);
+    const status = [];
+    if (row.summary.newCount) status.push(`${row.summary.newCount} new`);
+    if (row.summary.fixing) status.push(`${row.summary.fixing} fixing`);
+    if (status.length) cell.appendChild(createElement("small", "aap-quality-row-status", status.join(" · ")));
     return cell;
   }
 
-  function actorCell(actor, total) {
-    const cell = createElement("td", "aap-quality-actor-cell");
-    if (total) {
-      const text = createElement("span", "aap-quality-actor-name");
-      text.appendChild(createElement("strong", null, "All actors"));
-      text.appendChild(createElement("small", null, "Account total"));
-      cell.appendChild(text);
+  function impactCell(level) {
+    const cell = createElement("td", "aap-quality-impact");
+    if (!level) {
+      cell.appendChild(createElement("span", "aap-quality-empty", "–"));
       return cell;
     }
-    const link = document.createElement("a");
-    link.className = "aap-quality-actor-link";
-    link.href = `${location.pathname}?actorId=${encodeURIComponent(actor.id)}`;
-    link.title = "Open Apify's detailed Actor quality view";
-    if (actor.pictureUrl) {
-      const image = document.createElement("img");
-      image.src = actor.pictureUrl;
-      image.alt = "";
-      image.loading = "lazy";
-      link.appendChild(image);
-    }
-    const text = createElement("span", "aap-quality-actor-name");
-    text.appendChild(createElement("strong", null, actor.title));
-    text.appendChild(createElement("small", null, actor.name));
-    link.appendChild(text);
-    cell.appendChild(link);
+    const tone = { high: "bad", medium: "warning", low: "neutral" }[level];
+    cell.appendChild(createElement("span", `aap-portfolio-signal aap-portfolio-signal-${tone}`, level[0].toUpperCase() + level.slice(1)));
     return cell;
   }
 
-  function setupCell(row) {
-    const cell = createElement("td", "aap-quality-setup");
-    if (row.totalSummary) {
-      cell.appendChild(createElement("strong", null, `${row.totalSummary.setupReady}/${row.totalSummary.setupTotal}`));
-      cell.appendChild(createElement("small", null, "Actors fully set up"));
-      return cell;
-    }
-    const badges = createElement("span", "aap-quality-setup-list");
-    const checks = [
-      ["Input", row.scores?.hasInputSchema],
-      ["Output", row.scores?.hasOutputSchema],
-      ["README", row.scores?.hasReadme],
-    ];
-    for (const [label, present] of checks) {
-      const badge = createElement("span", `aap-quality-badge ${present ? "aap-quality-badge-good" : "aap-quality-badge-missing"}`, label);
-      badge.title = present ? `${label} available` : `${label} missing`;
-      badges.appendChild(badge);
-    }
-    cell.appendChild(badges);
-    return cell;
-  }
-
-  function qualityCell(row) {
-    const cell = createElement("td", "aap-quality-score");
-    const score = qualityScore(row);
-    if (score == null) {
-      cell.appendChild(createElement("span", "aap-quality-empty", row.failed ? "Unavailable" : "–"));
-      return cell;
-    }
-    const value = createElement("strong", null, formatPercent(score));
-    const meter = createElement("span", "aap-quality-meter");
-    const fill = createElement("span", "aap-quality-meter-fill");
-    fill.style.width = `${Math.max(0, Math.min(100, score * 100))}%`;
-    meter.appendChild(fill);
-    cell.append(value, meter, createElement("small", null, row.totalSummary ? "average" : formatPercentile(number(row.scores?.actorQualityPercentile))));
-    return cell;
-  }
-
-  function insightCountCell(count, label, className) {
-    const cell = createElement("td", className);
-    cell.append(createElement("strong", null, formatInteger(count)), createElement("small", null, label));
-    return cell;
-  }
-
-  function metricsCell(row, kind) {
+  function valueCell(value, detail) {
     const cell = createElement("td", "aap-quality-metric");
-    const metrics = row.metrics;
-    if (!metrics) {
-      cell.appendChild(createElement("span", "aap-quality-empty", "Unavailable"));
-      return cell;
-    }
-    if (kind === "runs") {
-      cell.appendChild(createElement("strong", null, formatInteger(metrics.publicActorRunStats30Days?.TOTAL)));
-      cell.appendChild(createElement("small", null, "last 30 days"));
-    } else if (kind === "users") {
-      cell.appendChild(createElement("strong", null, formatInteger(metrics.totalUsers)));
-      cell.appendChild(createElement("small", null, `${formatInteger(metrics.totalUsers30Days)} last 30 days`));
-    } else {
-      cell.appendChild(createElement("strong", null, formatPercent(number(metrics.runSuccessRate))));
-      cell.appendChild(createElement("small", null, "run success"));
-    }
+    cell.append(createElement("strong", null, value), createElement("small", null, detail));
     return cell;
-  }
-
-  function qualityTotalRow() {
-    if (!state.rows.length) return null;
-    const scored = state.rows.map((row) => qualityScore(row)).filter((value) => value != null);
-    const setupRows = state.rows.filter((row) => row.scores);
-    const setupReady = setupRows.filter((row) => row.scores.hasInputSchema && row.scores.hasOutputSchema && row.scores.hasReadme).length;
-    const metricRows = state.rows.filter((row) => row.metrics);
-    const runs = metricRows.reduce((sum, row) => sum + (number(row.metrics.publicActorRunStats30Days?.TOTAL) || 0), 0);
-    const users = metricRows.reduce((sum, row) => sum + (number(row.metrics.totalUsers) || 0), 0);
-    const users30Days = metricRows.reduce((sum, row) => sum + (number(row.metrics.totalUsers30Days) || 0), 0);
-    const weightedSuccess = metricRows.reduce((sum, row) => {
-      const rate = number(row.metrics.runSuccessRate);
-      const actorRuns = number(row.metrics.publicActorRunStats30Days?.TOTAL) || 0;
-      return rate == null ? sum : sum + rate * (actorRuns || 1);
-    }, 0);
-    const successWeight = metricRows.reduce((sum, row) => {
-      const rate = number(row.metrics.runSuccessRate);
-      return rate == null ? sum : sum + (number(row.metrics.publicActorRunStats30Days?.TOTAL) || 1);
-    }, 0);
-    return {
-      actor: { id: "__all__", title: "All actors", name: "Account total" },
-      scores: scored.length ? { actorQuality: scored.reduce((sum, value) => sum + value, 0) / scored.length } : null,
-      metrics: metricRows.length ? {
-        publicActorRunStats30Days: { TOTAL: runs },
-        totalUsers: users,
-        totalUsers30Days: users30Days,
-        runSuccessRate: successWeight ? weightedSuccess / successWeight : null,
-      } : null,
-      totalSummary: {
-        setupReady,
-        setupTotal: state.actors.length,
-        highlights: state.rows.reduce((sum, row) => sum + praises(row).length, 0),
-        suggestions: state.rows.reduce((sum, row) => sum + improvements(row).length, 0),
-      },
-    };
   }
 
   function skeletonCell(className, width) {
@@ -602,64 +660,187 @@
     return cell;
   }
 
-  function tableRow(row, total) {
-    const tableRow = document.createElement("tr");
-    if (row.loading && !total) {
-      tableRow.className = "aap-quality-row-loading";
-      tableRow.setAttribute("aria-busy", "true");
-      tableRow.append(
-        actorCell(row.actor, false),
-        skeletonCell("aap-quality-score", 44),
-        skeletonCell("aap-quality-setup", 110),
-        skeletonCell("aap-quality-insights", 96),
-        skeletonCell("aap-quality-insights aap-quality-improvements", 96),
-        skeletonCell("aap-quality-metric", 40),
-        skeletonCell("aap-quality-metric", 40),
-        skeletonCell("aap-quality-metric", 44),
-      );
-      return tableRow;
+  function tableRow(row) {
+    const element = document.createElement("tr");
+    if (!row.entry) {
+      element.className = "aap-quality-row-loading";
+      if (state.scan.running) {
+        element.setAttribute("aria-busy", "true");
+        element.append(actorCell(row.actor), ...[44, 110, 120, 40, 50, 40, 44].map((width) => skeletonCell("aap-quality-metric", width)));
+      } else {
+        const cell = createElement("td", "aap-quality-empty", "Not scanned yet");
+        cell.colSpan = 7;
+        element.append(actorCell(row.actor), cell);
+      }
+      return element;
     }
-    if (row.failed) tableRow.className = "aap-quality-row-partial";
-    tableRow.append(
-      actorCell(row.actor, total),
-      qualityCell(row),
-      setupCell(row),
-      total ? insightCountCell(row.totalSummary.highlights, "highlights", "aap-quality-insights") : insightsCell(praises(row), "None", "aap-quality-insights"),
-      total ? insightCountCell(row.totalSummary.suggestions, "suggestions", "aap-quality-insights aap-quality-improvements") : insightsCell(improvements(row), "None", "aap-quality-insights aap-quality-improvements"),
-      metricsCell(row, "runs"),
-      metricsCell(row, "users"),
-      metricsCell(row, "success"),
+    if (row.entry.failed) element.className = "aap-quality-row-partial";
+    const scores = row.entry.scores;
+    element.append(
+      actorCell(row.actor),
+      qualityCell(number(scores?.actorQuality), formatPercentile(number(scores?.actorQualityPercentile)), row.entry.failed),
+      setupCell(scores),
+      suggestionsCell(row),
+      impactCell(row.level),
+      valueCell(row.revenue.basis ? VIEW.formatMoney(row.revenue.value) : "–", row.revenue.basis || "no revenue"),
+      valueCell(formatInteger(runsFor(row.actor)), "runs this month"),
+      valueCell(row.success ? formatPercent(row.success.value) : "–", row.success ? `success ${row.success.basis}` : "no runs"),
     );
-    return tableRow;
+    return element;
   }
 
-  function loadingTotalRow() {
-    const tableRow = document.createElement("tr");
-    tableRow.className = "aap-quality-row-loading";
-    tableRow.setAttribute("aria-busy", "true");
-    tableRow.append(
-      actorCell({ title: "All actors", name: "Account total" }, true),
-      skeletonCell("aap-quality-score", 44),
-      skeletonCell("aap-quality-setup", 72),
-      skeletonCell("aap-quality-insights", 40),
-      skeletonCell("aap-quality-insights aap-quality-improvements", 40),
-      skeletonCell("aap-quality-metric", 40),
-      skeletonCell("aap-quality-metric", 40),
-      skeletonCell("aap-quality-metric", 44),
+  function totalRow(rows) {
+    const scanned = rows.filter((row) => row.entry?.scores);
+    const scores = scanned.map((row) => number(row.entry.scores.actorQuality)).filter((value) => value != null);
+    const setupReady = scanned.filter((row) => row.entry.scores.hasInputSchema && row.entry.scores.hasOutputSchema && row.entry.scores.hasReadme).length;
+    const suggestions = rows.reduce((sum, row) => sum + row.summary.open.length, 0);
+    const revenue = rows.reduce((sum, row) => sum + row.revenue.value, 0);
+    const runs = rows.reduce((sum, row) => sum + runsFor(row.actor), 0);
+    const succeeded = rows.reduce((sum, row) => sum + (state.snapshot.traffic[row.actor.id]?.current?.succeeded || 0), 0);
+    const element = document.createElement("tr");
+    const setup = createElement("td", "aap-quality-setup");
+    setup.append(createElement("strong", null, `${setupReady}/${rows.length}`), createElement("small", null, "Actors fully set up"));
+    const suggestionCell = createElement("td", "aap-quality-insights aap-quality-improvements");
+    suggestionCell.append(createElement("strong", null, formatInteger(suggestions)), createElement("small", null, "open suggestions"));
+    element.append(
+      actorCell(null, true),
+      qualityCell(scores.length ? scores.reduce((sum, value) => sum + value, 0) / scores.length : null, "average", false),
+      setup,
+      suggestionCell,
+      impactCell(null),
+      valueCell(VIEW.formatMoney(revenue), "last month or pace"),
+      valueCell(formatInteger(runs), "runs this month"),
+      valueCell(runs ? formatPercent(succeeded / runs) : "–", "success this month"),
     );
-    return tableRow;
+    return element;
   }
 
   function appendTableHeader(table) {
     const head = document.createElement("thead");
     const row = document.createElement("tr");
-    for (const label of ["Actor", "Quality", "Setup", "Highlights", "Suggestions", "Runs (30d)", "Users", "Success"]) {
+    for (const label of ["Actor", "Quality", "Setup", "Suggestions", "Impact", "Revenue", "Runs", "Success"]) {
       const header = createElement("th", null, label);
       if (label === "Setup") header.title = "Checks whether the Actor has an input schema, output schema, and README.";
+      if (label === "Impact") header.title = "Suggestion weight (security and reliability first) times the Actor's revenue, runs, and users.";
+      if (label === "Revenue") header.title = "The larger of last month's revenue and this month's projected pace.";
       row.appendChild(header);
     }
     head.appendChild(row);
     table.appendChild(head);
+  }
+
+  function renderTable(now) {
+    const rows = tableRows(now);
+    const visible = filteredRows(rows);
+    hideQualityTooltip();
+    refs.totalBody.replaceChildren();
+    if (rows.some((row) => row.entry)) refs.totalBody.appendChild(totalRow(rows));
+    refs.body.replaceChildren();
+    if (!visible.length) {
+      const empty = document.createElement("tr");
+      const cell = createElement("td", "aap-quality-table-empty", state.error ? "No quality data available." : actors().length ? "No Actors match this filter." : "Loading Actors…");
+      cell.colSpan = 8;
+      empty.appendChild(cell);
+      refs.body.appendChild(empty);
+      return;
+    }
+    const fragment = document.createDocumentFragment();
+    for (const row of visible) fragment.appendChild(tableRow(row));
+    refs.body.appendChild(fragment);
+  }
+
+  // ---- Rendering --------------------------------------------------------------
+
+  function scheduleRender(delay) {
+    if (renderTimer) return;
+    renderTimer = setTimeout(() => {
+      renderTimer = null;
+      render();
+    }, delay);
+  }
+
+  function render() {
+    if (renderTimer) {
+      clearTimeout(renderTimer);
+      renderTimer = null;
+    }
+    if (!refs) return;
+    const now = Date.now();
+    const total = actors().length;
+    const scanned = scannedCount();
+    refs.summary.textContent = total ? `${total.toLocaleString("en-US")} Actors` : "";
+    VIEW.renderProgress(refs.progress, state.scan, state.snapshot, now);
+    const failedCount = actors().filter((actor) => state.snapshot.entries[actor.id]?.failed).length;
+    refs.status.replaceChildren();
+    if (state.error) refs.status.appendChild(createElement("span", null, state.error));
+    else if (!state.scan.running && failedCount) {
+      refs.status.appendChild(createElement("span", null, `${failedCount} ${failedCount === 1 ? "Actor" : "Actors"} could not be fully loaded; showing their last known data.`));
+      const retry = createElement("button", "aap-quality-more", "Retry failed");
+      retry.type = "button";
+      retry.addEventListener("click", retryFailed);
+      refs.status.appendChild(retry);
+    }
+    refs.refresh.disabled = state.scan.running && !state.scan.background;
+    refs.tabs.forEach((tab) => {
+      const active = tab.dataset.view === state.view;
+      tab.setAttribute("aria-pressed", String(active));
+      tab.classList.toggle("aap-insights-nav-view-button-active", active);
+    });
+    refs.inbox.hidden = state.view !== "inbox";
+    refs.tableArea.hidden = state.view !== "table";
+    refs.tableControls.hidden = state.view !== "table";
+
+    if (state.view === "inbox") {
+      const inbox = MODEL.buildInbox(actors(), state.snapshot, state.lifecycle, state.snapshot.traffic, now, { query: state.query, includeHidden: state.selection === "hidden" });
+      const qualities = actors().map((actor) => state.snapshot.entries[actor.id]?.scores?.actorQuality).filter((value) => typeof value === "number");
+      VIEW.renderInbox(refs.inbox, {
+        inbox,
+        now,
+        snapshot: state.snapshot,
+        scannedCount: scanned,
+        scanning: state.scan.running,
+        error: state.error,
+        query: state.query,
+        movements: state.previous ? MODEL.diffScores(actors(), state.snapshot, state.previous.scores) : [],
+        previousCapturedAt: state.previous?.capturedAt || 0,
+        selection: state.selection,
+        averageQuality: qualities.length ? qualities.reduce((sum, value) => sum + value, 0) / qualities.length : null,
+        expandedIssues: state.expandedIssues,
+        highlightActor: state.highlightActor,
+        actorHref,
+        revenueFor: (actor) => MODEL.revenueForRanking(state.snapshot.traffic[actor.id], now),
+        runsFor,
+      }, {
+        onAction,
+        onSelect: selectEntry,
+        onToggleIssue: (key) => {
+          if (state.expandedIssues.has(key)) state.expandedIssues.delete(key);
+          else state.expandedIssues.add(key);
+          render();
+        },
+      });
+      applyDeepLink();
+    } else {
+      renderTable(now);
+    }
+    if (total && !state.scan.running) window.AAP_INSIGHTS_NAV?.prefetchOtherTabs?.("quality");
+  }
+
+  // qActor from the URL scrolls to that Actor's first suggestion once the
+  // scan has settled.
+  function applyDeepLink() {
+    if (!host || !state.highlightActor || state.scan.running) return;
+    const target = host.querySelector(`[data-actor-id="${CSS.escape(state.highlightActor)}"]`);
+    if (!target) return;
+    target.scrollIntoView({ block: "center" });
+    state.highlightActor = null;
+  }
+
+  function setView(view) {
+    if (state.view === view) return;
+    state.view = view;
+    writeUrlState();
+    render();
   }
 
   function syncView() {
@@ -672,50 +853,22 @@
   function setViewMode(mode) {
     state.showOriginal = mode === "original";
     syncView();
-    if (!state.showOriginal && !state.requestId) beginLoad(false);
+    maybeScan();
   }
 
-  function renderRows() {
-    if (!refs) return;
-    const rows = filteredRows();
-    const loadedCount = loadedActorCount();
-    refs.summary.textContent = state.loading
-      ? `Loading Actor list${state.actors.length ? ` · ${state.completed} of ${state.rows.length} details` : ""}…`
-      : `Showing ${rows.length} matching Actors · ${loadedCount} details loaded · ${state.actors.length} total`;
-    if (state.error) refs.status.textContent = state.error;
-    else refs.status.textContent = "";
-
-    hideQualityTooltip();
-    refs.totalBody.replaceChildren();
-    const total = qualityTotalRow();
-    if (state.loading) refs.totalBody.appendChild(loadingTotalRow());
-    else if (total) refs.totalBody.appendChild(tableRow(total, true));
-
-    refs.body.replaceChildren();
-    if (!rows.length) {
-      if (!state.loading) {
-        const empty = document.createElement("tr");
-        const cell = createElement("td", "aap-quality-table-empty", state.error ? "No quality data available." : "No Actors match this filter.");
-        cell.colSpan = 8;
-        empty.appendChild(cell);
-        refs.body.appendChild(empty);
-      }
-    } else {
-      for (const row of rows) refs.body.appendChild(tableRow(row, false));
+  function select(label, options, value, onChange, className) {
+    const element = document.createElement("select");
+    if (className) element.className = className;
+    element.setAttribute("aria-label", label);
+    for (const [optionValue, optionLabel] of options) {
+      const option = document.createElement("option");
+      option.value = optionValue;
+      option.textContent = optionLabel;
+      element.appendChild(option);
     }
-    const remaining = Math.max(0, state.actors.length - state.rows.length);
-    if (refs.more) {
-      refs.more.hidden = !remaining;
-      refs.more.disabled = state.detailLoading;
-      refs.more.textContent = state.detailLoading ? "Loading…" : `Load more Actors (${Math.min(ACTOR_PAGE_SIZE, remaining)})`;
-    }
-    if (refs.all) {
-      refs.all.hidden = !remaining;
-      refs.all.disabled = state.detailLoading;
-      refs.all.textContent = state.detailLoading ? "Loading…" : "Load all Actors";
-    }
-    if (!state.loading && !state.detailLoading) queueAutoLoad();
-    if (!state.loading && state.actors.length) window.AAP_INSIGHTS_NAV?.prefetchOtherTabs?.("quality");
+    element.value = value;
+    element.addEventListener("change", () => onChange(element.value));
+    return element;
   }
 
   function createHost() {
@@ -726,70 +879,71 @@
     const heading = createElement("div");
     heading.append(
       createElement("h2", null, "Actor quality overview"),
-      createElement("p", null, "Quality scores and recommendations for all your Actors."),
+      createElement("p", null, "What needs your attention across all your Actors, busiest first."),
     );
     const summary = createElement("span", "aap-quality-summary");
-    header.append(heading, summary);
+    const progress = createElement("div", "aap-quality-inbox-progress");
+    progress.setAttribute("aria-live", "polite");
+    const side = createElement("div", "aap-quality-header-side");
+    side.append(summary, progress);
+    header.append(heading, side);
 
     const controls = createElement("div", "aap-quality-controls aap-insights-controls");
+    // Same segmented control as the Original/Plus toggle in the tab bar.
+    const tabList = createElement("div", "aap-insights-nav-view-toggle aap-quality-view-toggle");
+    tabList.setAttribute("role", "group");
+    tabList.setAttribute("aria-label", "Quality view");
+    const tabs = [["inbox", "Inbox"], ["table", "Table"]].map(([view, label]) => {
+      const tab = createElement("button", "aap-insights-nav-view-button", label);
+      tab.type = "button";
+      tab.dataset.view = view;
+      tab.addEventListener("click", () => setView(view));
+      tabList.appendChild(tab);
+      return tab;
+    });
     const search = document.createElement("input");
     search.type = "search";
     search.placeholder = "Filter Actors or suggestions";
     search.setAttribute("aria-label", "Filter Actors or suggestions");
+    search.value = state.query;
     search.addEventListener("input", () => {
       state.query = search.value;
-      renderRows();
-      loadSearchMatches().catch(() => {});
+      render();
     });
-    const suggestionFilter = document.createElement("select");
-    suggestionFilter.className = "aap-quality-suggestion-filter";
-    suggestionFilter.setAttribute("aria-label", "Filter Actors by suggestions");
-    for (const [value, label] of [["all", "All Actors"], ["with", "With suggestions"], ["without", "Without suggestions"]]) {
-      const option = document.createElement("option");
-      option.value = value;
-      option.textContent = label;
-      suggestionFilter.appendChild(option);
-    }
-    suggestionFilter.addEventListener("change", () => {
-      state.suggestionFilter = suggestionFilter.value;
-      renderRows();
+
+    const tableControls = createElement("span", "aap-quality-table-controls");
+    const suggestionFilter = select("Filter Actors by suggestions", [["all", "All Actors"], ["with", "With suggestions"], ["without", "Without suggestions"]], state.suggestionFilter, (value) => {
+      state.suggestionFilter = value;
+      render();
+    }, "aap-quality-suggestion-filter");
+    const workType = select("Filter Actors by work type", [["all", "All work types"], ...MODEL.WORK_GROUPS.map((group) => [group.key, group.label])], state.workType, (value) => {
+      state.workType = value;
+      render();
     });
-    const sort = document.createElement("select");
-    sort.setAttribute("aria-label", "Sort Actors by");
-    for (const [value, label] of [["quality", "Quality"], ["improvements", "Suggestions"], ["runs", "Runs"], ["users", "Users"], ["name", "Name"]]) {
-      const option = document.createElement("option");
-      option.value = value;
-      option.textContent = `Sort by ${label}`;
-      sort.appendChild(option);
-    }
-    sort.addEventListener("change", () => {
-      state.sort = sort.value;
-      renderRows();
+    const sort = select("Sort Actors by", [["impact", "Sort by Impact"], ["quality", "Sort by Quality"], ["improvements", "Sort by Suggestions"], ["revenue", "Sort by Revenue"], ["runs", "Sort by Runs"], ["name", "Sort by Name"]], state.sort, (value) => {
+      state.sort = value;
+      render();
     });
-    const order = createElement("button", "aap-quality-order", "↓ Desc");
+    const order = createElement("button", "aap-quality-order", state.direction === "asc" ? "↑ Asc" : "↓ Desc");
     order.type = "button";
     order.setAttribute("aria-label", "Toggle sort direction");
     order.title = "Switch between descending and ascending order";
     order.addEventListener("click", () => {
       state.direction = state.direction === "asc" ? "desc" : "asc";
       order.textContent = state.direction === "asc" ? "↑ Asc" : "↓ Desc";
-      renderRows();
+      render();
     });
-    const refresh = createElement("button", "aap-quality-refresh", "Refresh");
-    refresh.type = "button";
-    refresh.addEventListener("click", () => {
-      AAP_API.forceFresh?.();
-      beginLoad(true);
-    });
-    const more = createElement("button", "aap-quality-more", "Load more Actors");
-    more.type = "button";
-    more.addEventListener("click", () => loadMoreActors(false));
-    const all = createElement("button", "aap-quality-more", "Load all Actors");
-    all.type = "button";
-    all.addEventListener("click", () => loadMoreActors(true));
-    controls.append(search, suggestionFilter, sort, order, refresh, more, all);
+    tableControls.append(suggestionFilter, workType, sort, order);
+
+    const refreshButton = createElement("button", "aap-quality-refresh", "Refresh");
+    refreshButton.type = "button";
+    refreshButton.title = "Fetch every Actor's quality data again";
+    refreshButton.addEventListener("click", refresh);
+    controls.append(tabList, search, tableControls, refreshButton);
 
     const status = createElement("div", "aap-quality-status");
+    const inbox = createElement("div", "aap-quality-inbox");
+
     function tableShell(label, bodyKey) {
       const section = createElement("section", `aap-quality-table-section aap-table-section ${bodyKey === "totalBody" ? "aap-table-section-total" : "aap-table-section-rows"}`);
       section.setAttribute("aria-label", label);
@@ -807,16 +961,38 @@
       section[bodyKey] = body;
       return section;
     }
+    const tableArea = createElement("div", "aap-quality-table-area");
     const totalSection = tableShell("All actors", "totalBody");
     const actorsSection = tableShell("Actors", "body");
-    const sentinel = createElement("div", "aap-load-sentinel");
-    sentinel.setAttribute("aria-hidden", "true");
-    host.append(header, controls, status, totalSection, actorsSection, sentinel);
-    window.AAP_INSIGHTS_NAV?.watchSentinel?.(sentinel, autoLoadMore);
-    refs = { summary, status, more, all, sentinel, totalBody: totalSection.totalBody, body: actorsSection.body };
+    tableArea.append(totalSection, actorsSection);
+
+    host.append(header, controls, status, inbox, tableArea);
+    refs = {
+      summary,
+      progress,
+      status,
+      inbox,
+      tableArea,
+      tableControls,
+      tabs,
+      refresh: refreshButton,
+      totalBody: totalSection.totalBody,
+      body: actorsSection.body,
+    };
     syncView();
     return host;
   }
+
+  self.AAP_PREFETCH = self.AAP_PREFETCH || {};
+  self.AAP_PREFETCH.quality = () => {
+    const month = currentMonthKey();
+    const previous = self.AAP_PORTFOLIO_MODEL?.previousMonthKey?.(month);
+    return Promise.all([
+      AAP_API.actorList({ priority: "background" }),
+      AAP_API.actorBreakdown(month, [], { priority: "background" }).catch(() => null),
+      previous ? AAP_API.actorBreakdown(previous, [], { priority: "background" }).catch(() => null) : null,
+    ]);
+  };
 
   function ensureHost() {
     if (!onOverviewRoute()) return;
@@ -833,70 +1009,38 @@
       created = true;
     }
     if (empty) empty.dataset.aapQualityNative = "hidden";
-    if (created) renderRows();
-    const organization = organizationScope();
-    if (state.organization !== organization) {
-      state.requestId++;
-      state.loading = false;
-      state.detailLoading = false;
-      state.error = null;
-      state.actors = [];
-      state.rows = [];
-      state.completed = 0;
-      state.loadedAt = 0;
-      state.organization = organization;
-      renderRows();
+    if (created) render();
+    // The scope (organization plus signed-in account) is known only once the
+    // page has made its first authenticated request.
+    if (!AAP_API.hasToken?.()) return;
+    const scope = viewScope();
+    if (state.scope !== scope) {
+      resetScope();
+      state.scope = scope;
+      render();
+      restore(scope);
+      return;
     }
-    if (state.showOriginal || !restoreSettled || Date.now() < loadBlockedUntil) return;
-    if (!state.loadedAt) beginLoad(false);
-    else if (Date.now() - state.loadedAt > QUALITY_REFRESH_TTL_MS) beginLoad(false, true);
+    maybeScan();
   }
 
   function removeHost() {
+    // Leaving the page stops the scan; what it fetched so far is kept and the
+    // next visit resumes from there.
+    if (state.scan.running) {
+      if (state.scanTag) AAP_API.cancel?.(state.scanTag);
+      state.requestId++;
+      state.scanTag = null;
+      state.scan = { ...state.scan, running: false };
+      state.scanAttemptAt = 0;
+      persistSnapshot();
+    }
     document.documentElement.classList.remove(OVERVIEW_CLASS);
     window.AAP_INSIGHTS_NAV?.removeViewToggle("quality");
     hideQualityTooltip();
     host?.remove();
     host = null;
     refs = null;
-  }
-
-  async function beginLoad(force, silent = false) {
-    if (state.loading) return;
-    if (!force && !silent && state.requestId && state.loadedAt) return;
-    const requestId = ++state.requestId;
-    state.organization = organizationScope();
-    state.loadedAt = Date.now();
-    if (!silent) {
-      state.loading = true;
-      state.error = null;
-      state.actors = [];
-      state.rows = [];
-      state.completed = 0;
-      state.detailLoading = false;
-      renderRows();
-    }
-    try {
-      const actors = normalizeActors(await AAP_API.actorList());
-      if (requestId !== state.requestId) return;
-      state.actors = actors;
-      if (!silent) {
-        state.rows = actors.slice(0, ACTOR_PAGE_SIZE).map(placeholderRow);
-        renderRows();
-      }
-      const actorsToLoad = silent
-        ? state.rows.filter((row) => row.loaded).map((row) => row.actor)
-        : actors.slice(0, ACTOR_PAGE_SIZE);
-      await loadActors(actorsToLoad, requestId, silent);
-    } catch (error) {
-      if (requestId === state.requestId && !silent) state.error = `Couldn't load Actor quality data${error?.message ? `: ${error.message}` : "."}`;
-    } finally {
-      if (requestId === state.requestId) {
-        state.loading = false;
-        renderRows();
-        loadSearchMatches().catch(() => {});
-      }
-    }
   }
 
   const poll = setInterval(() => {

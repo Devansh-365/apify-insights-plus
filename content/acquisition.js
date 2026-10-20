@@ -1,10 +1,32 @@
-/* Replaces the single-selection acquisition view with an account-wide table. */
+/*
+ * Replaces the single-selection acquisition view with an account-wide triage
+ * and table. The triage scans every Actor once a day, busiest first, sorts
+ * each into a bucket (Leaking, Rising, ...), and is saved so the next visit
+ * paints instantly. The table keeps the original page-by-page loading and
+ * reuses the triage scan's rows when they exist.
+ */
 (function () {
   const ROUTE_RE = /^(?:\/organization\/[^/]+)?\/actors\/insights\/acquisition\/?$/;
   const OVERVIEW_CLASS = "aap-acquisition-overview-page";
   const HOST_CLASS = "aap-acquisition-overview";
   const ACTOR_PAGE_SIZE = 25;
   const CACHE_CLEAR_KEY = "aap.cacheClearedAt";
+  const SNAPSHOT_VIEW = "acquisition-triage";
+  const PREVIOUS_VIEW = "acquisition-triage-prev";
+  // The busiest Actors are fetched at foreground priority and painted one by
+  // one; the long tail runs in the background and paints in batches.
+  const FOREGROUND_ACTORS = 50;
+  const PERSIST_EVERY = 25;
+  // Bucket changes compare against a scan at least this old, so a manual
+  // refresh minutes after a scan never compares the day with itself.
+  const BASELINE_MIN_AGE_MS = 20 * 60 * 60 * 1000;
+  const SCAN_RETRY_MS = 5 * 60 * 1000;
+  const VIEW_STORE_TTL_MS = 40 * 24 * 60 * 60 * 1000;
+
+  const MODEL = self.AAP_ACQUISITION_TRIAGE;
+  const VIEW = self.AAP_ACQUISITION_TRIAGE_VIEW;
+  // Ranking, traffic, and scan planning are shared with the quality inbox.
+  const QUALITY = self.AAP_QUALITY_INBOX;
 
   // Matches lib/api.js's cacheTtl(): current-month data settles quickly and
   // is worth re-checking every minute; historical months are effectively
@@ -12,7 +34,15 @@
   const CURRENT_MONTH_REFRESH_TTL_MS = 60 * 1000;
   const HISTORICAL_REFRESH_TTL_MS = 15 * 60 * 1000;
 
+  const initialParams = new URLSearchParams(location.search);
   const state = {
+    view: initialParams.get("aView") === "table" ? "table" : "triage",
+    // The triage entry in view: a bucket key or "movers". null means the
+    // changes since yesterday, else the most urgent non-empty bucket.
+    selection: initialParams.get("aBucket") || null,
+    highlightActor: initialParams.get("aActor") || null,
+    expanded: new Set(),
+    triage: emptyTriage(),
     actors: [],
     rows: [],
     total: null,
@@ -35,10 +65,33 @@
   let host = null;
   let refs = null;
   let pageThemeSignature = "";
+  let renderTimer = null;
+
+  function emptyTriage() {
+    return {
+      scope: null,
+      month: null,
+      restoring: false,
+      snapshot: MODEL.emptySnapshot(),
+      previous: null,
+      scan: { running: false, background: false, total: 0, done: 0, failed: 0 },
+      scanAttemptAt: 0,
+      error: null,
+      requestId: 0,
+      tag: null,
+    };
+  }
+
+  function resetTriage() {
+    if (state.triage.tag) AAP_API.cancel?.(state.triage.tag);
+    const requestId = state.triage.requestId + 1;
+    state.triage = { ...emptyTriage(), requestId };
+  }
 
   AAP_API.onTokenChange?.(() => {
     // A tab can stay open while the user logs out or switches accounts. Do
     // not keep showing the previous account's acquisition data in that case.
+    resetTriage();
     state.requestId++;
     state.loading = false;
     state.detailLoading = false;
@@ -59,6 +112,7 @@
   chrome.storage.onChanged?.addListener((changes, area) => {
     if (area !== "local" || !changes[CACHE_CLEAR_KEY]) return;
     loadBlockedUntil = Date.now() + Math.random() * 2_000;
+    resetTriage();
     state.requestId++;
     state.loading = false;
     state.detailLoading = false;
@@ -70,7 +124,7 @@
     state.rows = [];
     state.loadedAt = 0;
     state.organization = null;
-    renderRows();
+    render();
   });
 
   // A closed-and-reopened tab loses all in-memory state, so on a fresh page
@@ -103,7 +157,7 @@
       state.totalLoaded = cached.data.totalLoaded ?? false;
       state.requestId = 1;
       state.loadedAt = cached.updatedAt;
-      renderRows();
+      render();
     } catch {
       // Best effort only; ensureHost() still triggers a normal load either way.
     } finally {
@@ -293,7 +347,7 @@
       (completed) => {
         if (requestId !== state.requestId || silent) return;
         state.completed = completedBefore + completed;
-        renderRows();
+        render();
       },
       { priority: silent ? "background" : "foreground" },
     );
@@ -331,7 +385,7 @@
     if (!actors.length || state.detailLoading) return;
     state.detailLoading = true;
     ensureRows(actors);
-    if (!silent) renderRows();
+    if (!silent) render();
     try {
       const rows = await loadActorRows(actors, month, previousMonth, portion, requestId, silent);
       if (requestId !== state.requestId) return;
@@ -346,7 +400,7 @@
     } finally {
       if (requestId === state.requestId) {
         state.detailLoading = false;
-        renderRows();
+        render();
       }
     }
   }
@@ -354,8 +408,8 @@
   // Scrolling near the end of the table loads the next page of Actors.
   let autoLoadTimer = null;
   function autoLoadMore() {
-    if (!refs?.sentinel || state.loading || state.detailLoading || state.showOriginal || state.query.trim()) return;
-    if (state.rows.length >= state.actors.length) return;
+    if (!refs?.sentinel || state.view !== "table" || state.loading || state.detailLoading || state.showOriginal || state.query.trim()) return;
+    if (coveredIds().size >= state.actors.length) return;
     if (!window.AAP_INSIGHTS_NAV?.sentinelNearViewport?.(refs.sentinel)) return;
     loadMoreActors(false).then(() => queueAutoLoad()).catch(() => {});
   }
@@ -368,8 +422,13 @@
   self.AAP_PREFETCH = self.AAP_PREFETCH || {};
   self.AAP_PREFETCH.acquisition = () => {
     const month = currentCalendarMonthStartAt();
+    const breakdownMonth = month.slice(0, 10);
+    const previousBreakdownMonth = self.AAP_PORTFOLIO_MODEL?.previousMonthKey?.(breakdownMonth);
     return Promise.allSettled([
       AAP_API.actorList({ priority: "background" }),
+      // The triage ranks its scan by these; the Portfolio uses them too.
+      AAP_API.actorBreakdown(breakdownMonth, [], { priority: "background" }),
+      previousBreakdownMonth ? AAP_API.actorBreakdown(previousBreakdownMonth, [], { priority: "background" }) : null,
       AAP_API.acquisitionData(month, [], { priority: "background" }),
       AAP_API.acquisitionData(previousMonthStartAt(month), [], { portionOfMonthElapsed: comparisonPortion(month), priority: "background" }),
     ]);
@@ -378,7 +437,7 @@
   async function loadMoreActors(loadAll = false) {
     if (state.detailLoading || !state.actors.length || !state.monthStartAt) return;
     const requestId = state.requestId;
-    const loadedIds = new Set(state.rows.map((row) => row.actor.id));
+    const loadedIds = coveredIds();
     const remaining = state.actors.filter((actor) => !loadedIds.has(actor.id));
     const portion = comparisonPortion(state.monthStartAt);
     if (!remaining.length) return;
@@ -393,11 +452,344 @@
   }
 
   async function loadSearchMatches() {
-    if (state.detailLoading || !state.query.trim() || !state.actors.length) return;
-    const loadedIds = new Set(state.rows.map((row) => row.actor.id));
+    if (state.view !== "table" || state.detailLoading || !state.query.trim() || !state.actors.length) return;
+    const loadedIds = coveredIds();
     const matches = state.actors.filter((actor) => actorMatches(actor, state.query) && !loadedIds.has(actor.id));
     if (!matches.length) return;
     await loadActors(matches, state.monthStartAt, previousMonthStartAt(state.monthStartAt), comparisonPortion(state.monthStartAt), state.requestId);
+  }
+
+  // ---- Triage scan ------------------------------------------------------------
+
+  // The triage snapshot for the month the table shows, if one is loaded.
+  function triageSnapshotFor(month) {
+    return month && state.triage.month === month && state.triage.scope ? state.triage.snapshot : null;
+  }
+
+  // Table rows: rows the table loaded itself, plus every other Actor the
+  // triage scan already has, so the table never refetches scanned Actors.
+  function displayRows() {
+    const snapshot = triageSnapshotFor(state.monthStartAt);
+    if (!snapshot) return state.rows;
+    const byId = new Map(state.rows.map((row) => [row.actor.id, row]));
+    for (const actor of state.actors) {
+      const entry = snapshot.entries[actor.id];
+      if (byId.get(actor.id)?.loaded || !entry || entry.viewers == null) continue;
+      byId.set(actor.id, MODEL.tableRow(actor, entry));
+    }
+    return state.actors.filter((actor) => byId.has(actor.id)).map((actor) => byId.get(actor.id));
+  }
+
+  function coveredIds() {
+    return new Set(displayRows().map((row) => row.actor.id));
+  }
+
+  function persistTriage() {
+    if (!state.triage.scope) return;
+    AAP_CACHE.setView?.(SNAPSHOT_VIEW, state.triage.snapshot, state.triage.scope);
+  }
+
+  async function restoreTriage(scope) {
+    const triage = state.triage;
+    triage.restoring = true;
+    const requestId = triage.requestId;
+    try {
+      const [snapshot, previous] = await Promise.all([
+        AAP_CACHE.getView?.(SNAPSHOT_VIEW, VIEW_STORE_TTL_MS, scope),
+        AAP_CACHE.getView?.(PREVIOUS_VIEW, VIEW_STORE_TTL_MS, scope),
+      ]);
+      if (requestId !== state.triage.requestId) return;
+      if (snapshot?.hit) triage.snapshot = MODEL.restoreSnapshot(snapshot.data);
+      // An older baseline format kept buckets, not counts; it is dropped and
+      // the next day's scan starts a new one.
+      if (previous?.hit && MODEL.isBaseline(previous.data)) triage.previous = previous.data;
+    } catch {
+      // Restoring is best effort; a scan rebuilds everything.
+    } finally {
+      if (requestId === state.triage.requestId) {
+        triage.restoring = false;
+        render();
+        maybeScanTriage();
+      }
+    }
+  }
+
+  function triageIsFresh(now = Date.now()) {
+    const { snapshot } = state.triage;
+    return snapshot.complete && now - snapshot.scannedAt < MODEL.ENTRY_FRESH_MS;
+  }
+
+  function maybeScanTriage() {
+    const triage = state.triage;
+    if (!triage.scope || triage.restoring || triage.scan.running || state.showOriginal || state.view !== "triage") return;
+    if (Date.now() < loadBlockedUntil || Date.now() - triage.scanAttemptAt < SCAN_RETRY_MS) return;
+    if (triageIsFresh()) return;
+    // A stale complete snapshot is refetched in full; an incomplete one
+    // resumes where it stopped.
+    const stale = triage.snapshot.complete;
+    startTriageScan({ force: stale, fresh: stale, background: triage.snapshot.actors.length > 0 });
+  }
+
+  // Loads the Actor list and last/this month's actor-breakdown (usually warm
+  // from the Portfolio or Quality pages), then ranks Actors so the busiest
+  // are scanned first.
+  async function loadTriageContext(options) {
+    const now = Date.now();
+    const month = `${new Date(now).toISOString().slice(0, 7)}-01`;
+    const previousMonth = self.AAP_PORTFOLIO_MODEL?.previousMonthKey?.(month);
+    const normalizeRows = self.AAP_PORTFOLIO_MODEL?.normalizeRows || (() => []);
+    const breakdown = (value) => value
+      ? AAP_API.actorBreakdown(value, [], options).then(normalizeRows).catch(() => null)
+      : Promise.resolve(null);
+    const [rawActors, previousRows, currentRows] = await Promise.all([
+      AAP_API.actorList(options),
+      breakdown(previousMonth),
+      breakdown(month),
+    ]);
+    const traffic = QUALITY.trafficFromRows(previousRows || [], currentRows || []);
+    return QUALITY.rankActors(normalizeActors(rawActors), traffic, now);
+  }
+
+  function settled(result, fallback) {
+    return result.status === "fulfilled" ? result.value : fallback;
+  }
+
+  // Two requests per Actor: the month and the same elapsed portion of the
+  // previous month. On the first day there is no elapsed portion, so the
+  // comparison request is skipped rather than reading back zeros.
+  async function fetchAcquisition(actor, month, portion, options) {
+    const requests = [AAP_API.acquisitionData(month, [actor.id], options)];
+    if (portion > 0) requests.push(AAP_API.acquisitionData(previousMonthStartAt(month), [actor.id], { ...options, portionOfMonthElapsed: portion }));
+    const results = await Promise.allSettled(requests);
+    const cancelled = results.find((result) => result.status === "rejected" && /cancelled/i.test(result.reason?.message || ""));
+    if (cancelled) throw cancelled.reason;
+    return {
+      data: settled(results[0], null),
+      previous: results[1] ? settled(results[1], null) : null,
+      failed: results.some((result) => result.status === "rejected"),
+    };
+  }
+
+  function actorEntries(snapshot) {
+    return snapshot.actors.map((actor) => snapshot.entries[actor.id]).filter(Boolean);
+  }
+
+  // While a scan runs, buckets use the last complete scan's thresholds so
+  // they do not shift as each Actor arrives; a first scan has none yet, so
+  // its buckets are provisional until it finishes.
+  function triageThresholds() {
+    const { snapshot, scan } = state.triage;
+    if (scan.running && snapshot.thresholds) return { thresholds: snapshot.thresholds, provisional: false };
+    return { thresholds: MODEL.computeThresholds(actorEntries(snapshot)), provisional: scan.running };
+  }
+
+  function triageEarly(now = Date.now()) {
+    return MODEL.isEarlyMonth(state.triage.month, now);
+  }
+
+  async function startTriageScan({ force = false, fresh = false, background = false } = {}) {
+    const triage = state.triage;
+    if (triage.scan.running) return;
+    const requestId = ++triage.requestId;
+    const tag = `acquisition-scan-${requestId}`;
+    const { scope, month } = triage;
+    triage.tag = tag;
+    triage.scanAttemptAt = Date.now();
+    triage.error = null;
+    triage.scan = { running: true, background, total: 0, done: 0, failed: 0 };
+    render();
+
+    const startedFrom = triage.snapshot;
+    // The previous complete scan becomes the comparison baseline once it is
+    // about a day old, so a refresh minutes after a scan never compares the
+    // day with itself. It is saved now so changes show while this scan runs,
+    // and survive an interrupted scan.
+    if (startedFrom.complete
+      && triage.scanAttemptAt - startedFrom.scannedAt >= BASELINE_MIN_AGE_MS
+      && startedFrom.scannedAt > (triage.previous?.capturedAt || 0)) {
+      triage.previous = MODEL.baselineFrom(startedFrom, { early: MODEL.isEarlyMonth(month, startedFrom.scannedAt) });
+      AAP_CACHE.setView?.(PREVIOUS_VIEW, triage.previous, scope);
+    }
+
+    try {
+      const actors = await loadTriageContext({ priority: "foreground", tag, fresh });
+      if (requestId !== state.triage.requestId) return;
+      const now = Date.now();
+      const portion = comparisonPortion(month);
+      const snapshot = {
+        ...triage.snapshot,
+        startedAt: force || !triage.snapshot.startedAt ? now : triage.snapshot.startedAt,
+        complete: false,
+        actors,
+        entries: { ...triage.snapshot.entries },
+      };
+      triage.snapshot = snapshot;
+      const plan = QUALITY.planScan(actors, snapshot, now, { force });
+      triage.scan.total = plan.length;
+      render();
+
+      let sincePersist = 0;
+      const onActor = async (actor, priority) => {
+        const result = await fetchAcquisition(actor, month, portion, { priority, tag, fresh });
+        if (requestId !== state.triage.requestId) return;
+        const previousEntry = snapshot.entries[actor.id];
+        const entry = MODEL.compactEntry(result, Date.now());
+        // A failed fetch keeps the last good data instead of blanking it.
+        snapshot.entries[actor.id] = entry.failed && previousEntry && previousEntry.viewers != null
+          ? { ...previousEntry, failed: true }
+          : entry;
+        triage.scan.done++;
+        if (entry.failed) triage.scan.failed++;
+        if (++sincePersist >= PERSIST_EVERY) {
+          sincePersist = 0;
+          persistTriage();
+        }
+        scheduleRender(priority === "foreground" ? 0 : 400);
+      };
+
+      const segments = [
+        [plan.slice(0, FOREGROUND_ACTORS), "foreground"],
+        [plan.slice(FOREGROUND_ACTORS), "background"],
+      ];
+      for (const [list, priority] of segments) {
+        if (!list.length) continue;
+        await AAP_API.pooled(list, (actor) => onActor(actor, priority), { priority });
+        if (requestId !== state.triage.requestId) return;
+        persistTriage();
+        render();
+      }
+
+      const ids = new Set(actors.map((actor) => actor.id));
+      for (const id of Object.keys(snapshot.entries)) if (!ids.has(id)) delete snapshot.entries[id];
+      snapshot.complete = true;
+      snapshot.scannedAt = Date.now();
+      snapshot.thresholds = MODEL.computeThresholds(actorEntries(snapshot));
+      persistTriage();
+    } catch (error) {
+      if (requestId !== state.triage.requestId) return;
+      if (!/cancelled/i.test(error?.message || "")) {
+        triage.error = `Couldn't load acquisition data${error?.message ? `: ${error.message}` : "."}`;
+      }
+      persistTriage();
+    } finally {
+      if (requestId === state.triage.requestId) {
+        triage.scan = { ...triage.scan, running: false };
+        triage.tag = null;
+        render();
+      }
+    }
+  }
+
+  function retryTriageFailed() {
+    state.triage.scanAttemptAt = 0;
+    startTriageScan({ force: false, fresh: true, background: true });
+  }
+
+  function refreshTriage() {
+    const triage = state.triage;
+    if (!triage.scope) return;
+    if (triage.tag) AAP_API.cancel?.(triage.tag);
+    triage.requestId++;
+    triage.tag = null;
+    triage.scan = { running: false, background: false, total: 0, done: 0, failed: 0 };
+    startTriageScan({ force: true, fresh: true, background: Object.keys(triage.snapshot.entries).length > 0 });
+  }
+
+  // ---- URL state ----------------------------------------------------------------
+
+  function writeUrlState() {
+    const url = new URL(location.href);
+    if (state.view === "table") url.searchParams.set("aView", "table");
+    else url.searchParams.delete("aView");
+    if (state.selection) url.searchParams.set("aBucket", state.selection);
+    else url.searchParams.delete("aBucket");
+    if (url.href !== location.href) history.replaceState(history.state, "", url.href);
+  }
+
+  function selectEntry(selection) {
+    state.selection = selection;
+    writeUrlState();
+    render();
+    host?.querySelector(".aap-quality-inbox-detail")?.scrollIntoView({ block: "nearest" });
+  }
+
+  function actorHref(actor) {
+    const url = new URL(location.href);
+    for (const key of ["aView", "aBucket", "aActor"]) url.searchParams.delete(key);
+    url.searchParams.set("actorId", actor.id);
+    return `${url.pathname}${url.search}`;
+  }
+
+  // aActor from the URL opens that Actor's bucket and scrolls to it once the
+  // scan has settled.
+  function applyDeepLink() {
+    if (!host || !state.highlightActor || state.triage.scan.running) return;
+    const target = host.querySelector(`.aap-acquisition-triage [data-actor-id="${CSS.escape(state.highlightActor)}"]`);
+    if (!target) return;
+    target.scrollIntoView({ block: "center" });
+    state.highlightActor = null;
+  }
+
+  function triageTotals() {
+    if (!state.totalLoaded || state.monthStartAt !== state.triage.month || !state.total) return null;
+    const comparable = comparisonPortion(state.monthStartAt) > 0 && state.totalPrevious;
+    return {
+      viewers: number(state.total.numUniqueViewingUsers),
+      prevViewers: comparable ? number(state.totalPrevious.numUniqueViewingUsers) : null,
+      starters: number(state.total.numUniqueUsersWithRun),
+      prevStarters: comparable ? number(state.totalPrevious.numUniqueUsersWithRun) : null,
+    };
+  }
+
+  function renderTriagePane(now) {
+    const triage = state.triage;
+    const { snapshot } = triage;
+    const { thresholds, provisional } = triageThresholds();
+    const early = triageEarly(now);
+    const result = MODEL.buildTriage(snapshot.actors, snapshot, thresholds, { early, query: state.query });
+    const movers = MODEL.diffBuckets(snapshot.actors, snapshot, thresholds, triage.previous, { early, query: state.query });
+    let selection = state.selection;
+    if (!selection && state.highlightActor) {
+      selection = result.buckets.find((bucket) => bucket.items.some((item) => item.actor.id === state.highlightActor))?.key || null;
+    }
+    VIEW.renderTriage(refs.triage, {
+      triage: result,
+      thresholds,
+      provisional,
+      early,
+      movers,
+      baselineAt: triage.previous?.capturedAt || 0,
+      selection,
+      expanded: state.expanded,
+      query: state.query,
+      scanning: triage.scan.running,
+      error: triage.error,
+      totals: triageTotals(),
+      highlightActor: state.highlightActor,
+      actorHref,
+    }, {
+      onSelect: selectEntry,
+      onToggle: (key) => {
+        if (state.expanded.has(key)) state.expanded.delete(key);
+        else state.expanded.add(key);
+        render();
+      },
+    });
+    applyDeepLink();
+  }
+
+  // Bucket per Actor for the table's chips and Bucket sort.
+  function tableBuckets() {
+    const snapshot = triageSnapshotFor(state.monthStartAt);
+    if (!snapshot) return new Map();
+    const { thresholds } = triageThresholds();
+    const early = triageEarly();
+    const result = new Map();
+    for (const actor of state.actors) {
+      const entry = snapshot.entries[actor.id];
+      if (entry && entry.viewers != null) result.set(actor.id, MODEL.assignBucket(entry, thresholds, { early }).key);
+    }
+    return result;
   }
 
   function formatInteger(value) {
@@ -408,7 +800,7 @@
     return origin || "Direct / unknown";
   }
 
-  function actorCell(actor, total) {
+  function actorCell(actor, total, bucket) {
     const cell = createElement("td", "aap-acquisition-actor-cell");
     if (total) {
       const text = createElement("span", "aap-acquisition-actor-name");
@@ -431,6 +823,7 @@
     }
     const text = createElement("span", "aap-acquisition-actor-name");
     text.append(createElement("strong", null, actor.title), createElement("small", null, actor.name));
+    if (bucket) text.appendChild(VIEW.bucketSignal(bucket));
     link.appendChild(text);
     cell.appendChild(link);
     return cell;
@@ -479,10 +872,17 @@
     return cell;
   }
 
-  function sortRows(rows) {
+  // Bucket sort puts the most urgent bucket first in descending order.
+  function bucketRank(buckets, row) {
+    const bucket = MODEL.bucketFor(buckets.get(row.actor.id));
+    return bucket ? MODEL.BUCKETS.length - MODEL.BUCKETS.indexOf(bucket) : 0;
+  }
+
+  function sortRows(rows, buckets) {
     return rows.sort((a, b) => {
       let result = 0;
       if (state.sort === "name") result = a.actor.title.localeCompare(b.actor.title);
+      else if (state.sort === "bucket") result = (bucketRank(buckets, a) - bucketRank(buckets, b)) || ((metric(a, "numUniqueViewingUsers") || 0) - (metric(b, "numUniqueViewingUsers") || 0));
       else if (state.sort === "input") result = (metric(a, "numUniqueConsolePageViews") || 0) - (metric(b, "numUniqueConsolePageViews") || 0);
       else if (state.sort === "started") result = (metric(a, "numUniqueUsersWithRun") || 0) - (metric(b, "numUniqueUsersWithRun") || 0);
       else result = (metric(a, "numUniqueViewingUsers") || 0) - (metric(b, "numUniqueViewingUsers") || 0);
@@ -490,13 +890,9 @@
     });
   }
 
-  function filteredRows() {
+  function filteredRows(rows, buckets) {
     const query = state.query.trim().toLowerCase();
-    return sortRows(state.rows.filter((row) => !query || `${row.actor.title} ${row.actor.name}`.toLowerCase().includes(query)));
-  }
-
-  function loadedActorCount() {
-    return state.rows.filter((row) => row.loaded).length;
+    return sortRows(rows.filter((row) => !query || `${row.actor.title} ${row.actor.name}`.toLowerCase().includes(query)), buckets);
   }
 
   function appendTableHeader(table) {
@@ -518,12 +914,12 @@
     table.appendChild(head);
   }
 
-  function tableRow(row, total) {
+  function tableRow(row, total, bucket) {
     const tableRow = document.createElement("tr");
     if (row.loading) tableRow.className = "aap-acquisition-row-loading";
     else if (row.failed) tableRow.className = "aap-acquisition-row-partial";
     tableRow.append(
-      actorCell(row.actor, total),
+      actorCell(row.actor, total, bucket),
       metricCell(row, "numUniqueViewingUsers", "unique viewers"),
       metricCell(row, "numUniqueConsolePageViews", "unique viewers"),
       metricCell(row, "numUniqueUsersWithRun", "unique starters"),
@@ -552,17 +948,77 @@
     state.showOriginal = mode === "original";
     syncView();
     if (!state.showOriginal && !state.requestId) beginLoad(monthStartAt(), false);
+    maybeScanTriage();
   }
 
-  function renderRows() {
+  // Triage | Table. The table loads its first page on demand; Actors the
+  // triage scan already has are shown without refetching.
+  function setView(view) {
+    if (state.view === view) return;
+    state.view = view;
+    writeUrlState();
+    render();
+    if (view === "triage") maybeScanTriage();
+    else if (state.monthStartAt && !state.loading && !coveredIds().size) loadMoreActors(false).catch(() => {});
+  }
+
+  function scheduleRender(delay) {
+    if (renderTimer) return;
+    renderTimer = setTimeout(() => {
+      renderTimer = null;
+      render();
+    }, delay);
+  }
+
+  function render() {
+    if (renderTimer) {
+      clearTimeout(renderTimer);
+      renderTimer = null;
+    }
     if (!refs) return;
-    const rows = filteredRows();
-    const loadedCount = loadedActorCount();
+    const now = Date.now();
+    const triageView = state.view === "triage";
+    refs.tabs.forEach((tab) => {
+      const active = tab.dataset.view === state.view;
+      tab.setAttribute("aria-pressed", String(active));
+      tab.classList.toggle("aap-insights-nav-view-button-active", active);
+    });
+    refs.triage.hidden = !triageView;
+    refs.tableArea.hidden = triageView;
+    refs.tableControls.forEach((element) => { element.hidden = triageView; });
+    if (triageView) renderTriageHeader(now);
+    else renderTable();
+    if (triageView) renderTriagePane(now);
+    if (!state.loading && state.actors.length && !state.triage.scan.running) window.AAP_INSIGHTS_NAV?.prefetchOtherTabs?.("acquisition");
+  }
+
+  function renderTriageHeader(now) {
+    const { snapshot, scan, error } = state.triage;
+    const total = snapshot.actors.length;
+    refs.summary.textContent = total ? `${total.toLocaleString("en-US")} Actors · ${monthLabel(state.triage.month)}` : "";
+    VIEW.renderProgress(refs.progress, scan, snapshot, now);
+    const failedCount = snapshot.actors.filter((actor) => snapshot.entries[actor.id]?.failed).length;
+    refs.status.replaceChildren();
+    if (error) refs.status.appendChild(createElement("span", null, error));
+    else if (!scan.running && failedCount) {
+      refs.status.appendChild(createElement("span", null, `${failedCount} ${failedCount === 1 ? "Actor" : "Actors"} could not be fully loaded; showing their last known data.`));
+      const retry = createElement("button", "aap-acquisition-more", "Retry failed");
+      retry.type = "button";
+      retry.addEventListener("click", retryTriageFailed);
+      refs.status.appendChild(retry);
+    }
+  }
+
+  function renderTable() {
+    const buckets = tableBuckets();
+    const allRows = displayRows();
+    const rows = filteredRows([...allRows], buckets);
+    const loadedCount = allRows.filter((row) => row.loaded).length;
+    refs.progress.replaceChildren();
     refs.summary.textContent = state.loading
       ? `Loading Actor list${state.actors.length ? ` · ${state.completed} of ${state.rows.length} details` : ""} · ${monthLabel(state.monthStartAt)}…`
       : `Showing ${rows.length} matching Actors · ${loadedCount} details loaded · ${state.actors.length} total · ${monthLabel(state.monthStartAt)}`;
-    if (state.error) refs.status.textContent = state.error;
-    else refs.status.textContent = "";
+    refs.status.textContent = state.error || "";
 
     refs.totalBody.replaceChildren();
     if (state.totalLoaded) {
@@ -580,10 +1036,12 @@
     if (!rows.length) {
       if (!state.loading) refs.body.appendChild(emptyTableRow(state.error ? "No acquisition data available." : "No Actors match this filter."));
     } else {
-      for (const row of rows) refs.body.appendChild(tableRow(row, false));
+      const fragment = document.createDocumentFragment();
+      for (const row of rows) fragment.appendChild(tableRow(row, false, buckets.get(row.actor.id)));
+      refs.body.appendChild(fragment);
     }
 
-    const remaining = Math.max(0, state.actors.length - state.rows.length);
+    const remaining = Math.max(0, state.actors.length - allRows.length);
     if (refs.more) {
       refs.more.hidden = !remaining;
       refs.more.disabled = state.detailLoading;
@@ -595,7 +1053,6 @@
       refs.all.textContent = state.detailLoading ? "Loading…" : "Load all Actors";
     }
     if (!state.loading && !state.detailLoading) queueAutoLoad();
-    if (!state.loading && state.actors.length) window.AAP_INSIGHTS_NAV?.prefetchOtherTabs?.("acquisition");
   }
 
   function createHost() {
@@ -606,24 +1063,40 @@
     const heading = createElement("div");
     heading.append(
       createElement("h2", null, "Actor acquisition overview"),
-      createElement("p", null, "Acquisition activity for all your Actors."),
+      createElement("p", null, "Which Actors are gaining attention, losing it, or losing the people who find them."),
     );
     const summary = createElement("span", "aap-acquisition-summary");
-    header.append(heading, summary);
+    const progress = createElement("div", "aap-quality-inbox-progress aap-acquisition-progress");
+    progress.setAttribute("aria-live", "polite");
+    const side = createElement("div", "aap-acquisition-header-side");
+    side.append(summary, progress);
+    header.append(heading, side);
 
     const controls = createElement("div", "aap-acquisition-controls aap-insights-controls");
+    // Same segmented control as the Original/Plus toggle in the tab bar.
+    const tabList = createElement("div", "aap-insights-nav-view-toggle aap-acquisition-view-toggle");
+    tabList.setAttribute("role", "group");
+    tabList.setAttribute("aria-label", "Acquisition view");
+    const tabs = [["triage", "Triage"], ["table", "Table"]].map(([view, label]) => {
+      const tab = createElement("button", "aap-insights-nav-view-button", label);
+      tab.type = "button";
+      tab.dataset.view = view;
+      tab.addEventListener("click", () => setView(view));
+      tabList.appendChild(tab);
+      return tab;
+    });
     const search = document.createElement("input");
     search.type = "search";
     search.placeholder = "Filter Actors";
     search.setAttribute("aria-label", "Filter Actors");
     search.addEventListener("input", () => {
       state.query = search.value;
-      renderRows();
+      render();
       loadSearchMatches().catch(() => {});
     });
     const sort = document.createElement("select");
     sort.setAttribute("aria-label", "Sort Actors by");
-    for (const [value, label] of [["viewers", "Actor detail"], ["input", "Input page"], ["started", "Actor started"], ["name", "Name"]]) {
+    for (const [value, label] of [["viewers", "Actor detail"], ["input", "Input page"], ["started", "Actor started"], ["bucket", "Bucket"], ["name", "Name"]]) {
       const option = document.createElement("option");
       option.value = value;
       option.textContent = `Sort by ${label}`;
@@ -631,7 +1104,7 @@
     }
     sort.addEventListener("change", () => {
       state.sort = sort.value;
-      renderRows();
+      render();
     });
     const order = createElement("button", "aap-acquisition-order", "↓ Desc");
     order.type = "button";
@@ -640,12 +1113,14 @@
     order.addEventListener("click", () => {
       state.direction = state.direction === "asc" ? "desc" : "asc";
       order.textContent = state.direction === "asc" ? "↑ Asc" : "↓ Desc";
-      renderRows();
+      render();
     });
     const refresh = createElement("button", "aap-acquisition-refresh", "Refresh");
     refresh.type = "button";
+    refresh.title = "Fetch every Actor's acquisition data again";
     refresh.addEventListener("click", () => {
       AAP_API.forceFresh?.();
+      if (state.view === "triage") refreshTriage();
       beginLoad(monthStartAt(), true);
     });
     const more = createElement("button", "aap-acquisition-more", "Load more Actors");
@@ -654,9 +1129,14 @@
     const all = createElement("button", "aap-acquisition-more", "Load all Actors");
     all.type = "button";
     all.addEventListener("click", () => loadMoreActors(true));
-    controls.append(search, sort, order, refresh, more, all);
+    const tableControls = createElement("span", "aap-acquisition-table-controls");
+    tableControls.append(sort, order);
+    const tableActions = createElement("span", "aap-acquisition-table-controls");
+    tableActions.append(more, all);
+    controls.append(tabList, search, tableControls, refresh, tableActions);
 
     const status = createElement("div", "aap-acquisition-status");
+    const triage = createElement("div", "aap-acquisition-triage");
     function tableShell(label, bodyKey) {
       const section = createElement("section", `aap-acquisition-table-section aap-table-section ${bodyKey === "totalBody" ? "aap-acquisition-total-section aap-table-section-total" : "aap-acquisition-actors-section aap-table-section-rows"}`);
       section.setAttribute("aria-label", label);
@@ -678,9 +1158,24 @@
     const actorsSection = tableShell("Actors", "body");
     const sentinel = createElement("div", "aap-load-sentinel");
     sentinel.setAttribute("aria-hidden", "true");
-    host.append(header, controls, status, totalSection, actorsSection, sentinel);
+    const tableArea = createElement("div", "aap-acquisition-table-area");
+    tableArea.append(totalSection, actorsSection, sentinel);
+    host.append(header, controls, status, triage, tableArea);
     window.AAP_INSIGHTS_NAV?.watchSentinel?.(sentinel, autoLoadMore);
-    refs = { summary, status, more, all, sentinel, totalBody: totalSection.totalBody, body: actorsSection.body };
+    refs = {
+      summary,
+      progress,
+      status,
+      tabs,
+      triage,
+      tableArea,
+      tableControls: [tableControls, tableActions],
+      more,
+      all,
+      sentinel,
+      totalBody: totalSection.totalBody,
+      body: actorsSection.body,
+    };
     syncView();
     return host;
   }
@@ -701,7 +1196,7 @@
       else mount.appendChild(host);
       created = true;
     }
-    if (created) renderRows();
+    if (created) render();
     const organization = organizationScope();
     if (state.organization !== organization) {
       state.requestId++;
@@ -715,15 +1210,40 @@
       state.rows = [];
       state.loadedAt = 0;
       state.organization = organization;
-      renderRows();
+      render();
     }
     const month = monthStartAt();
+    // The triage scope (organization, month, signed-in account) is known only
+    // once the page has made its first authenticated request.
+    if (AAP_API.hasToken?.()) {
+      const scope = viewScope(month);
+      if (state.triage.scope !== scope) {
+        resetTriage();
+        state.triage.scope = scope;
+        state.triage.month = month;
+        render();
+        restoreTriage(scope);
+      } else {
+        maybeScanTriage();
+      }
+    }
     if (state.showOriginal || !restoreSettled || Date.now() < loadBlockedUntil) return;
     if (!state.requestId || state.monthStartAt !== month) { beginLoad(month, false); return; }
     if (Date.now() - state.loadedAt > refreshTtl(month)) beginLoad(month, false, true);
   }
 
   function removeHost() {
+    // Leaving the page stops the triage scan; what it fetched so far is kept
+    // and the next visit resumes from there.
+    const triage = state.triage;
+    if (triage.scan.running) {
+      if (triage.tag) AAP_API.cancel?.(triage.tag);
+      triage.requestId++;
+      triage.tag = null;
+      triage.scan = { ...triage.scan, running: false };
+      triage.scanAttemptAt = 0;
+      persistTriage();
+    }
     document.documentElement.classList.remove(OVERVIEW_CLASS);
     window.AAP_INSIGHTS_NAV?.removeViewToggle("acquisition");
     host?.remove();
@@ -748,7 +1268,7 @@
       state.totalPrevious = null;
       state.totalLoaded = false;
       state.detailLoading = false;
-      renderRows();
+      render();
     }
     try {
       const previousMonth = previousMonthStartAt(month);
@@ -767,13 +1287,17 @@
       state.total = totals[0].status === "fulfilled" ? totals[0].value : null;
       state.totalPrevious = totals[1].status === "fulfilled" ? totals[1].value : null;
       state.totalLoaded = true;
+      // The triage view needs only the totals here; the table loads its
+      // first page of Actors the triage scan has not covered.
+      const covered = coveredIds();
+      const firstPage = state.view === "table" ? actors.filter((actor) => !covered.has(actor.id)).slice(0, ACTOR_PAGE_SIZE) : [];
       if (!silent) {
-        state.rows = actors.slice(0, ACTOR_PAGE_SIZE).map(placeholderRow);
-        renderRows();
+        state.rows = firstPage.map(placeholderRow);
+        render();
       }
       const actorsToLoad = silent
         ? state.rows.filter((row) => row.loaded).map((row) => row.actor)
-        : actors.slice(0, ACTOR_PAGE_SIZE);
+        : firstPage;
       await loadActors(actorsToLoad, month, previousMonth, portion, requestId, silent);
       if (requestId !== state.requestId) return;
     } catch (error) {
@@ -781,7 +1305,7 @@
     } finally {
       if (requestId === state.requestId) {
         state.loading = false;
-        renderRows();
+        render();
         loadSearchMatches().catch(() => {});
       }
     }

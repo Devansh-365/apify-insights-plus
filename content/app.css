@@ -1650,13 +1650,13 @@ th[aria-sort="descending"] .aap-portfolio-sort {
   background: var(--aap-quality-surface-muted);
 }
 
-.aap-quality-table th:nth-child(1) { width: 24%; }
-.aap-quality-table th:nth-child(2) { width: 12%; }
-.aap-quality-table th:nth-child(3) { width: 14%; }
-.aap-quality-table th:nth-child(4),
-.aap-quality-table th:nth-child(5) { width: 13%; }
-.aap-quality-table th:nth-child(6),
-.aap-quality-table th:nth-child(7),
+.aap-quality-table th:nth-child(1) { width: 22%; }
+.aap-quality-table th:nth-child(2) { width: 11%; }
+.aap-quality-table th:nth-child(3) { width: 13%; }
+.aap-quality-table th:nth-child(4) { width: 22%; }
+.aap-quality-table th:nth-child(5) { width: 8%; }
+.aap-quality-table th:nth-child(6) { width: 9%; }
+.aap-quality-table th:nth-child(7) { width: 7%; }
 .aap-quality-table th:nth-child(8) { width: 8%; }
 
 .aap-quality-actor-link {
@@ -1837,6 +1837,546 @@ th[aria-sort="descending"] .aap-portfolio-sort {
 
 .aap-quality-row-partial {
   opacity: 0.78;
+}
+
+/* ---- Actor quality inbox ------------------------------------------------
+   Two panes: a ranked issue list and the selected issue's Actors. Reuses
+   the summary tiles (.aap-range-insight) and the Portfolio table. */
+.aap-quality-overview [hidden] {
+  display: none !important;
+}
+
+.aap-quality-table-controls {
+  display: contents;
+}
+
+.aap-quality-header-side {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--aap-text-subtle);
+  font-size: var(--aap-font-sm);
+}
+
+.aap-quality-header-side .aap-quality-summary {
+  line-height: 20px;
+}
+
+.aap-quality-header-side .aap-quality-summary:not(:empty) + .aap-quality-inbox-progress:not(:empty)::before {
+  content: "·";
+  margin-right: 4px;
+}
+
+.aap-quality-view-toggle {
+  margin: 0;
+}
+
+.aap-quality-inbox-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+.aap-quality-inbox-progress-bar {
+  display: block;
+  width: 96px;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--aap-bg-muted);
+}
+
+.aap-quality-inbox-progress-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--aap-accent);
+  transition: width 200ms ease;
+}
+
+.aap-quality-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.aap-quality-status:empty {
+  display: none;
+}
+
+.aap-quality-inbox {
+  font-variant-numeric: tabular-nums;
+}
+
+.aap-range-insights.aap-quality-inbox-summary {
+  margin: 0 0 24px;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--aap-separator);
+  border-radius: var(--aap-radius-lg);
+  background: var(--aap-card);
+}
+
+.aap-quality-inbox-summary .aap-range-insights-grid {
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 0;
+}
+
+.aap-quality-inbox-summary .aap-range-insight,
+.aap-quality-inbox-summary .aap-range-insight:first-child {
+  gap: 4px;
+  padding: 14px 18px 16px;
+  border-left: 1px solid var(--aap-separator);
+}
+
+.aap-quality-inbox-summary .aap-range-insight:first-child {
+  border-left: 0;
+}
+
+.aap-quality-inbox-summary .aap-range-insight .aap-range-insight-label {
+  color: var(--aap-text-subtle);
+  font-size: var(--aap-font-sm);
+  font-weight: 500;
+}
+
+.aap-quality-inbox-summary .aap-range-insight .aap-range-insight-value {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 28px;
+}
+
+.aap-quality-inbox-summary .aap-range-insight .aap-range-insight-detail {
+  color: var(--aap-text-subtle);
+  font-size: var(--aap-font-sm);
+  line-height: 18px;
+}
+
+.aap-quality-inbox-summary :is(.aap-range-insight-good, .aap-range-insight-bad, .aap-range-insight-warning, .aap-range-insight-accent) .aap-range-insight-detail::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 6px;
+  border-radius: 999px;
+  background: var(--aap-tile-tone);
+  vertical-align: 1px;
+}
+
+.aap-quality-inbox-summary .aap-range-insight-good { --aap-tile-tone: var(--aap-success); }
+.aap-quality-inbox-summary .aap-range-insight-bad { --aap-tile-tone: var(--aap-danger); }
+.aap-quality-inbox-summary .aap-range-insight-warning { --aap-tile-tone: var(--aap-warning); }
+.aap-quality-inbox-summary .aap-range-insight-accent { --aap-tile-tone: var(--aap-accent); }
+
+.aap-quality-inbox-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
+  align-items: start;
+  gap: 24px;
+}
+
+/* Left pane: issues ranked by total impact. */
+.aap-quality-inbox-list {
+  position: sticky;
+  top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.aap-quality-inbox-list-label {
+  margin: 20px 10px 6px;
+  color: var(--aap-text-subtle);
+  font-size: var(--aap-font-2xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.aap-quality-inbox-list-label:first-child {
+  margin-top: 0;
+}
+
+.aap-quality-inbox-entry {
+  --aap-group-tone: var(--aap-text-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 9px 10px 10px;
+  border: 0;
+  border-radius: var(--aap-radius);
+  color: var(--aap-text);
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 140ms ease;
+}
+
+.aap-quality-inbox-entry:hover {
+  background: color-mix(in srgb, var(--aap-text) 4%, transparent);
+}
+
+.aap-quality-inbox-entry[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--aap-text) 8%, transparent);
+}
+
+.aap-quality-inbox [data-group="security"] { --aap-group-tone: var(--aap-danger); }
+.aap-quality-inbox [data-group="ops"] { --aap-group-tone: var(--aap-warning); }
+.aap-quality-inbox [data-group="schema"],
+.aap-quality-inbox [data-group="pricing"] { --aap-group-tone: var(--aap-accent); }
+
+.aap-quality-inbox-entry-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.aap-quality-inbox-dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 6px;
+  margin: 0 1px;
+  border-radius: 999px;
+  background: var(--aap-group-tone);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--aap-group-tone) 18%, transparent);
+}
+
+.aap-quality-inbox-entry-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--aap-font-base);
+  font-weight: 500;
+  line-height: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aap-quality-inbox-entry-count {
+  color: var(--aap-text-subtle);
+  font-size: var(--aap-font-sm);
+  font-weight: 500;
+}
+
+.aap-quality-inbox-entry[aria-pressed="true"] .aap-quality-inbox-entry-count {
+  color: var(--aap-text);
+}
+
+.aap-quality-inbox-entry-meta {
+  padding-left: 16px;
+  overflow: hidden;
+  color: var(--aap-text-subtle);
+  font-size: var(--aap-font-xs);
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Share bars stay neutral; only the selected issue shows its tone. */
+.aap-quality-inbox-entry-bar {
+  display: block;
+  height: 2px;
+  margin: 6px 0 0 16px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--aap-separator);
+}
+
+.aap-quality-inbox-entry-bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--aap-text-subtle);
+  opacity: 0.55;
+  transition: background-color 140ms ease, opacity 140ms ease;
+}
+
+.aap-quality-inbox-entry[aria-pressed="true"] .aap-quality-inbox-entry-bar span {
+  background: var(--aap-group-tone);
+  opacity: 1;
+}
+
+.aap-quality-inbox-entry-muted .aap-quality-inbox-entry-title {
+  color: var(--aap-text-subtle);
+}
+
+.aap-quality-inbox-entry-muted .aap-quality-inbox-dot {
+  box-shadow: none;
+  opacity: 0.5;
+}
+
+/* Right pane: the selected issue. */
+.aap-quality-inbox-detail {
+  min-width: 0;
+}
+
+.aap-quality-inbox-detail-header {
+  --aap-group-tone: var(--aap-text-subtle);
+  margin-bottom: 16px;
+}
+
+.aap-quality-inbox-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  color: var(--aap-text-subtle);
+  font-size: var(--aap-font-2xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  line-height: 14px;
+  text-transform: uppercase;
+}
+
+.aap-quality-inbox-detail-header .aap-quality-inbox-eyebrow::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  flex: 0 0 6px;
+  border-radius: 999px;
+  background: var(--aap-group-tone);
+}
+
+.aap-quality-inbox-detail h3 {
+  margin: 0;
+  color: var(--aap-text);
+  font-size: var(--aap-font-xl);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 26px;
+}
+
+.aap-quality-inbox-detail-meta {
+  margin: 4px 0 0;
+  color: var(--aap-text-subtle);
+  font-size: var(--aap-font-sm);
+  line-height: 18px;
+}
+
+.aap-quality-inbox-detail-text {
+  max-width: 72ch;
+  margin: 8px 0 0;
+  color: var(--aap-text-muted);
+  font-size: var(--aap-font-base);
+  line-height: 20px;
+}
+
+.aap-quality-inbox-detail-empty {
+  padding: 48px 24px;
+  border: 1px dashed var(--aap-separator);
+  border-radius: var(--aap-radius-lg);
+  text-align: center;
+}
+
+.aap-quality-inbox-detail-empty .aap-quality-inbox-detail-text {
+  margin: 8px auto 0;
+}
+
+.aap-quality-inbox-table {
+  min-width: 720px;
+}
+
+.aap-quality-inbox-table th:nth-child(1) { width: 38%; }
+.aap-quality-inbox-table th:nth-child(2) { width: 11%; }
+.aap-quality-inbox-table th:nth-child(3) { width: 11%; }
+.aap-quality-inbox-table th:nth-child(4) { width: 10%; }
+.aap-quality-inbox-table th:nth-child(5) { width: 12%; }
+.aap-quality-inbox-table th:nth-child(6) { width: 18%; }
+
+.aap-quality-inbox-table tbody tr td {
+  vertical-align: middle;
+}
+
+.aap-quality-inbox-changes {
+  min-width: 720px;
+}
+
+.aap-quality-inbox-changes th:nth-child(1) { width: 32%; }
+.aap-quality-inbox-changes th:nth-child(2),
+.aap-quality-inbox-changes th:nth-child(3),
+.aap-quality-inbox-changes th:nth-child(4) { width: 10%; }
+.aap-quality-inbox-changes th:nth-child(5) { width: 38%; }
+
+/* Impact bar, scaled to the largest in the list. */
+.aap-quality-inbox-impact {
+  --aap-impact: color-mix(in srgb, var(--aap-text-subtle) 55%, transparent);
+}
+
+.aap-quality-inbox-impact-high { --aap-impact: var(--aap-text-muted); }
+.aap-quality-inbox-impact-medium { --aap-impact: var(--aap-text-subtle); }
+
+.aap-quality-inbox-impact-bar {
+  display: block;
+  width: 100%;
+  max-width: 96px;
+  height: 4px;
+  margin-left: auto;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--aap-separator);
+}
+
+.aap-quality-inbox-impact-bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--aap-impact);
+}
+
+/* Row actions stay quiet until the row is hovered or focused; touch
+   screens, which cannot hover, always show them. */
+.aap-portfolio-table td.aap-quality-inbox-actions {
+  white-space: nowrap;
+}
+
+.aap-quality-inbox-action {
+  height: 28px;
+  margin-left: 2px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: var(--aap-radius);
+  color: var(--aap-text-subtle);
+  background: transparent;
+  font: inherit;
+  font-size: var(--aap-font-sm);
+  font-weight: 500;
+  cursor: pointer;
+  opacity: 0;
+  transition: background-color 140ms ease, color 140ms ease, opacity 140ms ease;
+}
+
+.aap-quality-inbox-table tr:hover .aap-quality-inbox-action,
+.aap-quality-inbox-table tr:focus-within .aap-quality-inbox-action {
+  opacity: 1;
+}
+
+.aap-quality-inbox-action:first-child {
+  border-color: var(--aap-border);
+  color: var(--aap-text);
+}
+
+.aap-quality-inbox-action:hover {
+  color: var(--aap-text);
+  background: var(--aap-hover);
+}
+
+.aap-quality-inbox-action:active {
+  transform: scale(0.98);
+}
+
+@media (hover: none) {
+  .aap-quality-inbox-action {
+    opacity: 1;
+  }
+}
+
+.aap-quality-inbox-link {
+  margin-top: 10px;
+  padding: 4px 0;
+  border: 0;
+  color: var(--aap-accent-text);
+  background: none;
+  font: inherit;
+  font-size: var(--aap-font-sm);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.aap-quality-inbox-link:hover {
+  text-decoration: underline;
+}
+
+.aap-quality-inbox-why {
+  color: var(--aap-text-muted);
+  font-size: var(--aap-font-sm);
+}
+
+.aap-portfolio-table tbody tr.aap-quality-inbox-highlight {
+  background: var(--aap-accent-soft);
+}
+
+.aap-quality-row-status {
+  display: block;
+  margin-top: 4px;
+  color: var(--aap-accent-text);
+  font-size: var(--aap-font-xs);
+}
+
+.aap-quality-impact .aap-portfolio-signal {
+  display: inline-block;
+}
+
+:is(.aap-quality-inbox, .aap-acquisition-triage, .aap-acquisition-actor-name) .aap-portfolio-signal {
+  --aap-signal-tone: var(--aap-text-subtle);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: max-content;
+  padding: 0 8px 0 7px;
+  border: 1px solid var(--aap-separator);
+  border-radius: 999px;
+  color: var(--aap-text-muted);
+  background: transparent;
+  font-size: var(--aap-font-xs);
+  font-weight: 500;
+  line-height: 18px;
+}
+
+:is(.aap-quality-inbox, .aap-acquisition-triage, .aap-acquisition-actor-name) .aap-portfolio-signal::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  flex: 0 0 6px;
+  border-radius: 999px;
+  background: var(--aap-signal-tone);
+}
+
+:is(.aap-quality-inbox, .aap-acquisition-triage, .aap-acquisition-actor-name) .aap-portfolio-signal-good { --aap-signal-tone: var(--aap-success); }
+:is(.aap-quality-inbox, .aap-acquisition-triage, .aap-acquisition-actor-name) .aap-portfolio-signal-bad { --aap-signal-tone: var(--aap-danger); }
+:is(.aap-quality-inbox, .aap-acquisition-triage, .aap-acquisition-actor-name) .aap-portfolio-signal-warning { --aap-signal-tone: var(--aap-warning); }
+
+@media (max-width: 1000px) {
+  .aap-quality-inbox-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .aap-quality-inbox-list {
+    position: static;
+    max-height: none;
+  }
+}
+
+@media (max-width: 720px) {
+  .aap-quality-header-side {
+    flex-wrap: wrap;
+  }
+}
+
+@media (pointer: coarse) {
+  .aap-quality-inbox-action,
+  .aap-quality-inbox-entry {
+    min-height: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aap-quality-inbox-action,
+  .aap-quality-inbox-entry,
+  .aap-quality-inbox-entry-bar span,
+  .aap-quality-inbox-progress-fill {
+    transition: none;
+  }
+
+  .aap-quality-inbox-action:active {
+    transform: none;
+  }
 }
 
 /* ---- Account-wide Actor acquisition overview --------------------------- */
@@ -2173,6 +2713,80 @@ th[aria-sort="descending"] .aap-portfolio-sort {
   color: var(--aap-acquisition-text);
   font-size: 14px;
   line-height: 20px;
+}
+
+/* ---- Acquisition triage ------------------------------------------------
+   The same two-pane inbox as the Actor quality page (.aap-quality-inbox-*),
+   so both pages read as one product; only the bucket tones and the table
+   columns differ. */
+.aap-acquisition-overview [hidden] {
+  display: none !important;
+}
+
+.aap-acquisition-table-controls {
+  display: contents;
+}
+
+.aap-acquisition-view-toggle {
+  margin: 0;
+}
+
+.aap-acquisition-header-side {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 12px;
+  margin-left: auto;
+  color: var(--aap-text-subtle);
+  font-size: var(--aap-font-sm);
+}
+
+.aap-acquisition-header-side .aap-acquisition-summary:not(:empty) + .aap-acquisition-progress:not(:empty)::before {
+  content: "·";
+  margin-right: 4px;
+}
+
+.aap-acquisition-triage {
+  font-variant-numeric: tabular-nums;
+}
+
+.aap-acquisition-triage [data-group="leaking"] { --aap-group-tone: var(--aap-danger); }
+.aap-acquisition-triage [data-group="rising"],
+.aap-acquisition-triage [data-group="converting"] { --aap-group-tone: var(--aap-success); }
+.aap-acquisition-triage [data-group="fading"] { --aap-group-tone: var(--aap-warning); }
+.aap-acquisition-triage [data-group="movers"] { --aap-group-tone: var(--aap-accent); }
+
+.aap-acquisition-triage-table,
+.aap-acquisition-triage-movers {
+  min-width: 760px;
+}
+
+.aap-acquisition-triage-table th:nth-child(1) { width: 30%; }
+.aap-acquisition-triage-table th:nth-child(2),
+.aap-acquisition-triage-table th:nth-child(3),
+.aap-acquisition-triage-table th:nth-child(4) { width: 11%; }
+.aap-acquisition-triage-table th:nth-child(5) { width: 8%; }
+.aap-acquisition-triage-table th:nth-child(6) { width: 29%; }
+
+.aap-acquisition-triage-movers th:nth-child(1) { width: 30%; }
+.aap-acquisition-triage-movers th:nth-child(2),
+.aap-acquisition-triage-movers th:nth-child(3) { width: 11%; }
+.aap-acquisition-triage-movers th:nth-child(4) { width: 12%; }
+.aap-acquisition-triage-movers th:nth-child(5) { width: 36%; }
+
+.aap-acquisition-triage .aap-portfolio-table tbody tr td {
+  vertical-align: middle;
+}
+
+.aap-acquisition-actor-name .aap-portfolio-signal {
+  align-self: flex-start;
+  margin-top: 2px;
+}
+
+@media (max-width: 720px) {
+  .aap-acquisition-header-side {
+    flex-wrap: wrap;
+  }
 }
 
 /* ---- Account-wide run-success overview ------------------------------- */
@@ -2678,17 +3292,24 @@ th[aria-sort="descending"] .aap-portfolio-sort {
   font-size: var(--aap-font-base);
 }
 
+/* Acquisition sits under Apify's own filter row; this matches the gap the
+   other overviews have under the tab bar. */
+.aap-acquisition-overview {
+  margin-top: 12px;
+}
+
 :is(.aap-quality-header, .aap-acquisition-header, .aap-debugging-header) {
-  align-items: flex-end;
+  align-items: flex-start;
   gap: 16px;
-  margin-bottom: 12px;
+  margin-bottom: 16px;
 }
 
 :is(.aap-quality-header, .aap-acquisition-header, .aap-debugging-header) h2 {
   color: var(--aap-text);
   font-size: var(--aap-font-xl);
   font-weight: 600;
-  line-height: 24px;
+  letter-spacing: -0.01em;
+  line-height: 26px;
 }
 
 :is(.aap-quality-header, .aap-acquisition-header, .aap-debugging-header) p {
@@ -2697,10 +3318,15 @@ th[aria-sort="descending"] .aap-portfolio-sort {
   font-size: var(--aap-font-base);
 }
 
+/* Scan status sits on the title line, not floating beside the subtitle. */
+:is(.aap-quality-header-side, .aap-acquisition-header-side) {
+  min-height: 26px;
+}
+
 :is(.aap-quality-summary, .aap-acquisition-summary, .aap-debugging-summary) {
   color: var(--aap-text-subtle);
   font-size: var(--aap-font-sm);
-  line-height: 20px;
+  line-height: 26px;
   text-align: right;
 }
 
@@ -2726,6 +3352,16 @@ th[aria-sort="descending"] .aap-portfolio-sort {
   flex-wrap: wrap;
   gap: 8px;
   margin-bottom: 12px;
+}
+
+:is(.aap-quality-overview, .aap-acquisition-overview) .aap-insights-controls {
+  margin-bottom: 20px;
+}
+
+/* In the toolbar the view switch lines up with the title, unlike in the tab
+   bar where it needs a gap from the native tabs. */
+.aap-insights-controls .aap-insights-nav-view-toggle {
+  margin: 0;
 }
 
 .aap-insights-controls input[type="search"],
