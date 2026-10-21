@@ -548,7 +548,10 @@
     const active = onRoute();
     document.documentElement.classList.toggle(OVERVIEW_CLASS, active && !state.showOriginal);
     host?.classList.toggle("aap-debugging-original-mode", state.showOriginal);
-    window.AAP_INSIGHTS_NAV?.ensureViewToggle("debugging", state.showOriginal ? "original" : "custom", setViewMode);
+    // Only the page in view shows its toggle; a late render elsewhere
+    // removes it instead.
+    if (active) window.AAP_INSIGHTS_NAV?.ensureViewToggle("debugging", state.showOriginal ? "original" : "custom", setViewMode);
+    else window.AAP_INSIGHTS_NAV?.removeViewToggle("debugging");
   }
 
   function setViewMode(mode) {

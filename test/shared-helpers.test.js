@@ -3,9 +3,14 @@ const fs = require("node:fs");
 const vm = require("node:vm");
 
 const writes = [];
+const intervals = [];
+const removed = [];
+const strayToggle = { dataset: { aapInsightsViewOwner: "quality" }, remove: () => removed.push("quality") };
 const context = {
   self: {},
   location: { pathname: "/organization/acme/actors/insights" },
+  setInterval: (callback) => intervals.push(callback),
+  document: { querySelectorAll: (selector) => (selector === ".aap-insights-nav-view-toggle" ? [strayToggle] : []), querySelector: () => null },
   chrome: { storage: { local: { set: (items) => { writes.push(items); return Promise.resolve(); } } } },
 };
 context.window = context.self;
@@ -48,5 +53,18 @@ assert.equal(NAV.writeView(spec, url, "today"), false);
 assert.equal(url.search, "?timePeriod=2026-08", "Today drops the view and deep links, so a reload lands on Today");
 assert.equal(NAV.writeView(spec, url, "triage"), true);
 assert.equal(url.searchParams.get("aView"), "triage");
+
+// The Original/Plus toggle never mounts outside the Insights pages, and a
+// stray one is swept away there.
+context.location.pathname = "/actors/ALvOlTklatipYeFGg/source";
+assert.equal(NAV.ensureViewToggle("quality", "custom", () => {}), null, "no toggle on an Actor's own page");
+assert.deepEqual(removed, ["quality"], "an existing one is removed");
+removed.length = 0;
+intervals.forEach((sweep) => sweep());
+assert.deepEqual(removed, ["quality"], "the sweep clears a toggle left by a late render");
+removed.length = 0;
+context.location.pathname = "/organization/acme/actors/insights/actor-quality";
+intervals.forEach((sweep) => sweep());
+assert.deepEqual(removed, [], "kept on an Insights page");
 
 console.log("shared helper tests passed");

@@ -562,7 +562,8 @@
   }
 
   function syncSelector() {
-    window.AAP_INSIGHTS_NAV?.ensureViewToggle("monetization", state.view, setViewMode);
+    if (onInsightsRoute()) window.AAP_INSIGHTS_NAV?.ensureViewToggle("monetization", state.view, setViewMode);
+    else window.AAP_INSIGHTS_NAV?.removeViewToggle("monetization");
     if (!selector) return;
     const custom = state.view === "custom";
     const customControls = selector.querySelector(".aap-range-custom-controls");

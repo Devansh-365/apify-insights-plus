@@ -2,7 +2,11 @@
 (function () {
   const TAG_SLOT_SELECTOR = "[data-aap-profile-benchmark-tag]";
   const TARGET_NAME = "builder-benchmark-target";
+  // Ranks compare the builder's live numbers against the daily cohort file.
+  // A profile visit reuses live numbers up to this old; an open profile page
+  // refetches them, and rechecks the cohort file, this often while visible.
   const TARGET_TTL_MS = 15 * 60 * 1000;
+  const ROUTE_REFRESH_MS = TARGET_TTL_MS;
   const SNAPSHOT_TTL_MS = AAP_BENCHMARK.SNAPSHOT_TTL_MS || 24 * 60 * 60 * 1000;
   const SHARED_SNAPSHOT_URL = "https://gist.githubusercontent.com/Devansh-365/5cffdc0292be6bf8f8223eaa33ae1d74/raw";
   const PAGE_SIZE = 1000;
@@ -24,6 +28,12 @@
     targetBuilder: null,
     targetBuilderPromise: null,
     targetBuilderStatus: "idle",
+    // Whether targetBuilder holds the live profile numbers rather than the
+    // daily file's copy.
+    targetLive: false,
+    // The last live fetch failed while the daily file's copy is shown.
+    liveFailed: false,
+    refreshedAt: 0,
     scanStatus: "idle",
     scanError: null,
     slots: new Map(),
@@ -110,7 +120,7 @@
         metricKey,
         result: currentResult(metricKey),
         snapshot: state.snapshot,
-        stale: state.snapshotStale || state.scanStatus === "incomplete",
+        stale: state.snapshotStale || state.scanStatus === "incomplete" || (state.liveFailed && !state.targetLive),
         compact: true,
       });
       const tag = createElement(
@@ -146,8 +156,8 @@
 
   async function fetchSharedSnapshot() {
     const url = new URL(SHARED_SNAPSHOT_URL);
-    // Refresh at most once per snapshot window while still bypassing a stale
-    // browser/CDN response after the daily publisher has written a new file.
+    // One URL per day, revalidated with no-cache: an unchanged file costs a
+    // conditional request, and a new day's key gets past any CDN copy.
     url.searchParams.set("v", Math.floor(Date.now() / SNAPSHOT_TTL_MS));
     const response = await fetch(url.toString(), {
       cache: "no-cache",
@@ -159,8 +169,10 @@
     return snapshot;
   }
 
-  function loadSharedSnapshot() {
-    if (sharedSnapshotMemory && Date.now() - sharedSnapshotFetchedAt < SNAPSHOT_TTL_MS) {
+  // A visit reuses the tab's copy for one refresh window; a periodic
+  // refresh rechecks the file so a newly published day shows up.
+  function loadSharedSnapshot(recheck = false) {
+    if (!recheck && sharedSnapshotMemory && Date.now() - sharedSnapshotFetchedAt < ROUTE_REFRESH_MS) {
       return Promise.resolve(sharedSnapshotMemory);
     }
     if (sharedSnapshotPromise) return sharedSnapshotPromise;
@@ -178,53 +190,67 @@
     return operation;
   }
 
-  async function loadTargetBuilder(routeKey, username, snapshotPromise) {
+  // Every page of the builder's public Actors, fetched past the API cache
+  // and aggregated exactly as the daily publisher does (all Actors,
+  // including unrunnable ones), so the two are comparable.
+  async function fetchLiveBuilder(routeKey, username) {
+    const actors = [];
+    let offset = 0;
+    let total = null;
+    do {
+      const response = await AAP_API.publicActorStore(username, {
+        limit: PAGE_SIZE,
+        offset,
+        sortBy: "relevance",
+        includeUnrunnableActors: true,
+        priority: "foreground",
+        cacheMode: "no-store",
+      });
+      const page = AAP_PROFILE_SORT.normalizeStoreResponse(response, offset);
+      total = AAP_PROFILE_SORT.storeTotal(response);
+      actors.push(...page);
+      if (!page.length) break;
+      offset += page.length;
+    } while (offset < total);
+    return AAP_BENCHMARK.findBuilder(AAP_BENCHMARK.aggregateActors(actors).builders, routeKey);
+  }
+
+  // The daily file's copy of the builder shows a rank right away; the live
+  // profile numbers then replace it, so the rank follows today's numbers
+  // instead of yesterday's.
+  async function loadTargetBuilder(routeKey, username, snapshotPromise, fresh = false) {
     if (state.targetBuilderPromise) return state.targetBuilderPromise;
-    state.targetBuilderStatus = "loading";
+    if (!state.targetBuilder) state.targetBuilderStatus = "loading";
     const operation = (async () => {
       try {
-        // A fresh snapshot already contains the builder aggregate needed to
-        // calculate every tag. Waiting for the snapshot read avoids fetching
-        // the much larger profile Actor catalog on every profile visit.
         if (snapshotPromise) await snapshotPromise;
         if (state.routeKey !== routeKey) return;
-        if (setSnapshotTarget(routeKey)) return;
+        if (!state.targetLive && setSnapshotTarget(routeKey)) render();
 
-        // A first scan starts after the snapshot read finishes. Wait for it
-        // before using the profile fallback so the first visit and later
-        // visits rank the builder against the exact same cohort and metrics.
-        const scan = activeScan;
-        if (scan) {
-          await scan;
-          if (state.routeKey !== routeKey) return;
-          if (setSnapshotTarget(routeKey)) return;
-        }
-
-        // A profile can be visited before the first benchmark scan finishes,
-        // or it can be outside the locally observed Store cohort. Keep the
-        // small aggregate durable so this fallback is also reusable.
-        const cached = await AAP_CACHE.getView(TARGET_NAME, TARGET_TTL_MS, targetCacheScope(routeKey));
-        const cachedTarget = cached.hit ? findTargetBuilder(cached.data, routeKey) : null;
-        if (setTargetBuilder(routeKey, cachedTarget)) return;
+        const cached = fresh ? null : await AAP_CACHE.getView(TARGET_NAME, TARGET_TTL_MS, targetCacheScope(routeKey));
         if (state.routeKey !== routeKey) return;
-
-        const response = await AAP_API.publicActorStore(username, {
-          limit: PAGE_SIZE,
-          offset: 0,
-          sortBy: "relevance",
-          includeUnrunnableActors: true,
-          priority: "foreground",
-        });
-        const actors = AAP_PROFILE_SORT.normalizeStoreResponse(response);
-        const target = AAP_BENCHMARK.aggregateActors(actors).builders.find((builder) => builder.key === routeKey);
-        if (!target) throw new Error("The profile Actor data did not include this builder.");
-        setTargetBuilder(routeKey, target);
-        // Do not block the visible rank tag on this small persistence write.
-        AAP_CACHE.setView(TARGET_NAME, target, targetCacheScope(routeKey)).catch(() => {});
+        let target = cached?.hit && !cached.stale ? findTargetBuilder(cached.data, routeKey) : null;
+        if (!target) {
+          target = await fetchLiveBuilder(routeKey, username);
+          if (state.routeKey !== routeKey) return;
+          if (!target) throw new Error("The profile Actor data did not include this builder.");
+          // Do not block the visible rank tag on this small persistence write.
+          AAP_CACHE.setView(TARGET_NAME, target, targetCacheScope(routeKey)).catch(() => {});
+        }
+        if (setTargetBuilder(routeKey, target)) {
+          state.targetLive = true;
+          state.liveFailed = false;
+        }
       } catch (error) {
         if (state.routeKey !== routeKey) return;
-        state.targetBuilderStatus = "unavailable";
-        state.scanError = error?.message || "The profile Actor data could not be loaded.";
+        // With an earlier copy in hand the rank stays up; the daily file's
+        // copy is marked stale, and only a page with nothing to rank says it
+        // is unavailable.
+        state.liveFailed = true;
+        if (!state.targetBuilder) {
+          state.targetBuilderStatus = "unavailable";
+          state.scanError = error?.message || "The profile Actor data could not be loaded.";
+        }
       } finally {
         if (state.routeKey === routeKey) {
           if (state.targetBuilderPromise === operation) state.targetBuilderPromise = null;
@@ -245,12 +271,14 @@
     return Number.isFinite(capturedAt) && Date.now() - capturedAt > MAX_SNAPSHOT_AGE_MS;
   }
 
-  async function loadSnapshot(routeKey) {
+  // A periodic recheck never starts a Store scan: that runs once per visit,
+  // only when no cohort file could be loaded.
+  async function loadSnapshot(routeKey, recheck = false) {
     if (state.snapshotPromise) return state.snapshotPromise;
     const operation = (async () => {
       const previousSnapshot = sharedSnapshotMemory;
       try {
-        const sharedSnapshot = await loadSharedSnapshot();
+        const sharedSnapshot = await loadSharedSnapshot(recheck);
         if (state.routeKey !== routeKey) return;
         state.snapshot = sharedSnapshot;
         // The daily refresh can fail; label ranks from an old snapshot as
@@ -261,14 +289,15 @@
         if (state.routeKey !== routeKey) return;
         if (previousSnapshot && AAP_BENCHMARK.validateSnapshot(previousSnapshot)) {
           state.snapshot = previousSnapshot;
-          state.snapshotStale = true;
+          // A failed recheck keeps a copy that is still within its day.
+          state.snapshotStale = recheck ? snapshotTooOld(previousSnapshot) : true;
         }
         state.scanError = error?.message || "The shared benchmark snapshot could not be loaded.";
       }
 
       if (state.routeKey !== routeKey) return;
       if (state.snapshotPromise === operation) state.snapshotPromise = null;
-      const shouldAutoScan = !activeScan && !state.snapshot;
+      const shouldAutoScan = !recheck && !activeScan && !state.snapshot;
       if (shouldAutoScan) {
         state.scanStatus = "scanning";
         state.scanError = null;
@@ -396,7 +425,8 @@
           state.snapshot = snapshot;
           state.snapshotStale = false;
         }
-        if (state.routeKey && state.snapshot === snapshot) setSnapshotTarget(state.routeKey, snapshot);
+        // A scan's copy of the builder never replaces its live numbers.
+        if (state.routeKey && state.snapshot === snapshot && !state.targetLive) setSnapshotTarget(state.routeKey, snapshot);
         state.scanStatus = "complete";
         state.scanError = null;
         render();
@@ -423,12 +453,22 @@
     state.targetBuilder = null;
     state.targetBuilderPromise = null;
     state.targetBuilderStatus = "loading";
+    state.targetLive = false;
+    state.liveFailed = false;
     state.scanStatus = activeScan ? "scanning" : "idle";
     state.scanError = null;
     state.slots = new Map();
     render();
-    const snapshotPromise = loadSnapshot(route.key);
-    loadTargetBuilder(route.key, route.username, snapshotPromise);
+    refreshRoute(route, false);
+  }
+
+  // Loads the cohort file and the live numbers without clearing what is on
+  // screen, so a refresh never blanks the tags. A periodic refresh skips
+  // the caches, so it always brings this window's numbers.
+  function refreshRoute(route, periodic) {
+    state.refreshedAt = Date.now();
+    const snapshotPromise = loadSnapshot(route.key, periodic);
+    loadTargetBuilder(route.key, route.username, snapshotPromise, periodic);
   }
 
   function ensureRoute(route) {
@@ -450,6 +490,9 @@
     state.targetBuilder = null;
     state.targetBuilderPromise = null;
     state.targetBuilderStatus = "idle";
+    state.targetLive = false;
+    state.liveFailed = false;
+    state.refreshedAt = 0;
     state.scanStatus = "idle";
     state.scanError = null;
     state.slots = new Map();
@@ -462,6 +505,8 @@
       return;
     }
     ensureRoute(route);
+    // A profile left open keeps its ranks current while someone looks at it.
+    if (document.visibilityState !== "hidden" && Date.now() - state.refreshedAt > ROUTE_REFRESH_MS) refreshRoute(route, true);
     if (activeScan && state.scanStatus !== "scanning") {
       state.scanStatus = "scanning";
       render();
