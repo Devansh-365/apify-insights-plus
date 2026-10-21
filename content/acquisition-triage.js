@@ -26,13 +26,7 @@
     return element;
   }
 
-  function count(value) {
-    return Number(value || 0).toLocaleString("en-US");
-  }
-
-  function plural(value, one, many) {
-    return `${count(value)} ${value === 1 ? one : many}`;
-  }
+  const { count, plural } = self.AAPF;
 
   function relativeTime(timestamp, now) {
     if (!timestamp) return "never";

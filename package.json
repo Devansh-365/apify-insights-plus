@@ -4,6 +4,6 @@
   "scripts": {
     "build": "mkdir -p dist && zip -qr -FS dist/Apify-Insights-Plus-0.0.1.zip manifest.json content lib popup icons README.md",
     "check": "for file in content/*.js lib/*.js popup/*.js scripts/*.js; do node --check \"$file\"; done && node -e \"JSON.parse(require('fs').readFileSync('manifest.json'))\"",
-    "test": "node test/range.test.js && node test/context-cache.test.js && node test/api.test.js && node test/api-latency.test.js && node test/performance.test.js && node test/actor-detail.test.js && node test/profile-sort.test.js && node test/benchmark.test.js && node test/benchmark-source.test.js && node test/portfolio.test.js && node test/quality-inbox.test.js && node test/acquisition-triage.test.js && node test/token-sniffer.test.js"
+    "test": "node test/range.test.js && node test/context-cache.test.js && node test/api.test.js && node test/api-latency.test.js && node test/performance.test.js && node test/actor-detail.test.js && node test/profile-sort.test.js && node test/benchmark.test.js && node test/benchmark-source.test.js && node test/portfolio.test.js && node test/quality-inbox.test.js && node test/acquisition-triage.test.js && node test/today.test.js && node test/shared-helpers.test.js && node test/token-sniffer.test.js"
   }
 }

@@ -2789,6 +2789,853 @@ th[aria-sort="descending"] .aap-portfolio-sort {
   }
 }
 
+/* ---- Today ----------------------------------------------------------------
+   One short list across acquisition and quality, read like a to-do list:
+   tick it off, which Actor, what to do, what it is worth. A sidebar holds
+   the week and the batches. Grey by default; colour names the kind of work,
+   and red is kept for what gets worse if it waits. */
+.aap-today {
+  --aap-today-gutter: 64px;
+  color: var(--aap-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.aap-today [hidden] {
+  display: none !important;
+}
+
+.aap-today-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 32px;
+  align-items: start;
+}
+
+.aap-today-main {
+  min-width: 0;
+}
+
+.aap-today-aside {
+  position: sticky;
+  top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+/* Header: the date, how much is left, and progress on the right. */
+.aap-today-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 20px;
+}
+
+.aap-today-head-text {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+}
+
+.aap-today-eyebrow {
+  margin-bottom: 6px;
+  color: var(--aap-text-subtle);
+  font-size: var(--aap-font-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  line-height: 16px;
+  text-transform: uppercase;
+}
+
+.aap-today-headline {
+  margin: 0;
+  color: var(--aap-text);
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 28px;
+}
+
+.aap-today-sub {
+  max-width: 62ch;
+  margin: 4px 0 0;
+  color: var(--aap-text-subtle);
+  font-size: var(--aap-font-base);
+  line-height: 20px;
+}
+
+.aap-today-text-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 10px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--aap-accent-text);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--aap-font-base);
+  font-weight: 500;
+  line-height: 20px;
+}
+
+.aap-today-text-button:hover {
+  text-decoration: underline;
+}
+
+.aap-today-back {
+  margin: 0 0 8px;
+  color: var(--aap-text-subtle);
+}
+
+.aap-today-back .aap-today-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.aap-today-progress {
+  display: flex;
+  flex: 0 0 180px;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.aap-today-progress-text {
+  color: var(--aap-text-subtle);
+  font-size: var(--aap-font-sm);
+  line-height: 16px;
+}
+
+.aap-today-progress-text strong {
+  color: var(--aap-text);
+  font-size: var(--aap-font-md);
+  font-weight: 600;
+}
+
+.aap-today-progress-bar {
+  display: flex;
+  width: 100%;
+  gap: 4px;
+}
+
+.aap-today-progress-bar > span {
+  flex: 1 1 0;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--aap-separator);
+  transition: background-color 240ms ease;
+}
+
+.aap-today-progress-bar > .aap-today-progress-done {
+  background: var(--aap-success);
+}
+
+.aap-today-progress-bar-continuous {
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--aap-separator);
+}
+
+.aap-today-progress-bar-continuous > .aap-today-progress-done {
+  flex: 0 0 auto;
+  transition: width 320ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* The list: one card, rows split by hairlines. */
+.aap-today-list {
+  margin: 0;
+  padding: 0;
+  overflow: visible;
+  border: 1px solid var(--aap-separator);
+  border-radius: var(--aap-radius-lg);
+  background: var(--aap-card);
+  list-style: none;
+}
+
+.aap-today-item {
+  position: relative;
+  padding: 16px 20px;
+  border-top: 1px solid var(--aap-separator);
+  transition: background-color 160ms ease;
+}
+
+.aap-today-item:first-child {
+  border-top: 0;
+  border-radius: var(--aap-radius-lg) var(--aap-radius-lg) 0 0;
+}
+
+.aap-today-item:last-child {
+  border-radius: 0 0 var(--aap-radius-lg) var(--aap-radius-lg);
+}
+
+.aap-today-item:only-child {
+  border-radius: var(--aap-radius-lg);
+}
+
+.aap-today-item:hover,
+.aap-today-item:focus-within {
+  background: color-mix(in srgb, var(--aap-text) 2.5%, transparent);
+}
+
+.aap-today-item-main {
+  display: grid;
+  grid-template-columns: 22px 36px minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+}
+
+/* The tick: an empty circle, filled green once handled. */
+.aap-today-tick {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1.5px solid var(--aap-field-border);
+  border-radius: 999px;
+  background: var(--aap-field);
+  color: transparent;
+  cursor: pointer;
+  transition: border-color 160ms ease, background-color 160ms ease, color 160ms ease, transform 120ms ease;
+}
+
+.aap-today-tick::after {
+  /* A 44px hit area around the 22px circle. */
+  content: "";
+  position: absolute;
+  inset: -11px;
+}
+
+.aap-today-tick:hover:not(:disabled) {
+  border-color: var(--aap-success);
+  color: var(--aap-success);
+}
+
+.aap-today-tick:active:not(:disabled) {
+  transform: scale(0.92);
+}
+
+.aap-today-tick:focus-visible {
+  outline: 2px solid var(--aap-focus);
+  outline-offset: 2px;
+}
+
+.aap-today-tick:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.aap-today-tick-icon {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+.aap-today-item-handled .aap-today-tick {
+  border-color: var(--aap-success);
+  background: var(--aap-success);
+  color: var(--aap-on-accent);
+}
+
+.aap-today-item-handled .aap-today-tick:disabled {
+  opacity: 1;
+}
+
+.aap-today-avatar {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--aap-radius-lg);
+  background: var(--aap-bg-muted);
+  object-fit: cover;
+}
+
+.aap-today-avatar-empty {
+  color: var(--aap-text-subtle);
+  font-size: var(--aap-font-md);
+  font-weight: 600;
+}
+
+.aap-today-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.aap-today-title {
+  overflow: hidden;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--aap-text);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--aap-font-md);
+  font-weight: 600;
+  line-height: 20px;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aap-today-title:hover:not(:disabled) {
+  color: var(--aap-accent-text);
+}
+
+.aap-today-title:disabled {
+  cursor: default;
+}
+
+.aap-today-title:focus-visible {
+  border-radius: var(--aap-radius-sm);
+  outline: 2px solid var(--aap-focus);
+  outline-offset: 2px;
+}
+
+.aap-today-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  color: var(--aap-text-subtle);
+  font-size: var(--aap-font-sm);
+  line-height: 18px;
+}
+
+.aap-today-kind {
+  --aap-today-tone: var(--aap-text-placeholder);
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  color: var(--aap-text-muted);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.aap-today-kind::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--aap-today-tone);
+  transform: translateY(-1px);
+}
+
+[data-kind="listing"] .aap-today-kind,
+[data-kind="runform"] .aap-today-kind {
+  --aap-today-tone: var(--aap-accent);
+}
+
+[data-kind="promote"] .aap-today-kind {
+  --aap-today-tone: var(--aap-success);
+}
+
+[data-kind="fading"] .aap-today-kind {
+  --aap-today-tone: var(--aap-warning);
+}
+
+.aap-today .aap-today-kind-urgent {
+  --aap-today-tone: var(--aap-danger);
+  color: var(--aap-danger);
+}
+
+.aap-today-why {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aap-today-why::before {
+  content: "·";
+  margin-right: 8px;
+  color: var(--aap-text-placeholder);
+}
+
+.aap-today-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  min-width: 96px;
+  text-align: right;
+}
+
+.aap-today-amount {
+  color: var(--aap-text);
+  font-size: var(--aap-font-md);
+  font-weight: 600;
+  line-height: 20px;
+  white-space: nowrap;
+}
+
+.aap-today-caption {
+  color: var(--aap-text-subtle);
+  font-size: var(--aap-font-xs);
+  line-height: 16px;
+}
+
+.aap-today-side-urgent .aap-today-caption {
+  color: var(--aap-danger);
+  font-weight: 600;
+}
+
+.aap-today-item-handled .aap-today-title {
+  color: var(--aap-text-subtle);
+  font-weight: 500;
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--aap-text-subtle) 60%, transparent);
+}
+
+.aap-today-item-handled .aap-today-avatar {
+  opacity: 0.55;
+}
+
+.aap-today-item-handled .aap-today-kind {
+  color: var(--aap-text-subtle);
+}
+
+/* Buttons sit under the text, shown on the current row, on hover and on
+   keyboard focus, so only one next step stands out. */
+.aap-today-actions {
+  display: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 10px 0 -4px calc(22px + 36px + 28px);
+}
+
+.aap-today-item-current .aap-today-actions,
+.aap-today-item:hover .aap-today-actions,
+.aap-today-item:focus-within .aap-today-actions {
+  display: flex;
+}
+
+.aap-today-actions-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.aap-today-ghost {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: var(--aap-radius);
+  background: none;
+  color: var(--aap-text-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--aap-font-sm);
+  font-weight: 500;
+  line-height: 26px;
+  list-style: none;
+  text-decoration: none;
+  transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease;
+  white-space: nowrap;
+}
+
+.aap-today-ghost::-webkit-details-marker {
+  display: none;
+}
+
+.aap-today-ghost:hover {
+  background: var(--aap-hover);
+  color: var(--aap-text);
+}
+
+.aap-today-ghost:active {
+  transform: translateY(1px);
+}
+
+.aap-today-ghost:focus-visible {
+  outline: 2px solid var(--aap-focus);
+  outline-offset: 1px;
+}
+
+.aap-today-ghost-strong {
+  border-color: var(--aap-field-border);
+  background: var(--aap-field);
+  color: var(--aap-text);
+}
+
+.aap-today-icon {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.6;
+}
+
+.aap-today-menu {
+  position: relative;
+}
+
+.aap-today-menu[open] > .aap-today-ghost {
+  background: var(--aap-hover);
+  color: var(--aap-text);
+}
+
+.aap-today-menu-list {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 4px);
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 180px;
+  padding: 4px;
+  border: 1px solid var(--aap-popover-border);
+  border-radius: var(--aap-radius-lg);
+  background: var(--aap-popover-bg);
+  box-shadow: var(--aap-shadow-popover);
+}
+
+.aap-today-menu-item {
+  padding: 7px 10px;
+  border: 0;
+  border-radius: var(--aap-radius);
+  background: none;
+  color: var(--aap-text);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--aap-font-sm);
+  line-height: 18px;
+  text-align: left;
+}
+
+.aap-today-menu-item:hover,
+.aap-today-menu-item:focus-visible {
+  background: var(--aap-hover);
+  outline: none;
+}
+
+/* "Why this?" opens the numbers behind the item. */
+.aap-today-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 12px 0 0 calc(22px + 36px + 28px);
+  padding: 12px 14px;
+  border-radius: var(--aap-radius-lg);
+  background: var(--aap-bg-muted);
+}
+
+.aap-today-funnel-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px;
+}
+
+.aap-today-funnel-step {
+  display: flex;
+  flex-direction: column;
+}
+
+.aap-today-funnel-step strong {
+  color: var(--aap-text);
+  font-size: var(--aap-font-lg);
+  font-weight: 600;
+  line-height: 22px;
+}
+
+.aap-today-funnel-step span {
+  color: var(--aap-text-subtle);
+  font-size: var(--aap-font-xs);
+  line-height: 16px;
+}
+
+.aap-today-detail-title {
+  margin: 0;
+  color: var(--aap-text);
+  font-size: var(--aap-font-base);
+  font-weight: 600;
+  line-height: 20px;
+}
+
+.aap-today-hint {
+  margin: 0;
+  color: var(--aap-text-muted);
+  font-size: var(--aap-font-base);
+  line-height: 20px;
+}
+
+.aap-today-fine {
+  margin: 0;
+  color: var(--aap-text-subtle);
+  font-size: var(--aap-font-sm);
+  line-height: 18px;
+}
+
+/* Sidebar cards. */
+.aap-today-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--aap-separator);
+  border-radius: var(--aap-radius-lg);
+  background: var(--aap-card);
+}
+
+.aap-today-card-title {
+  margin: 0;
+  color: var(--aap-text-subtle);
+  font-size: var(--aap-font-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  line-height: 16px;
+  text-transform: uppercase;
+}
+
+.aap-today-card-title + .aap-today-fine {
+  margin-top: -6px;
+}
+
+.aap-today-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+}
+
+.aap-today-stat {
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 2px;
+  min-width: 0;
+}
+
+.aap-today-stat dt {
+  color: var(--aap-text-subtle);
+  font-size: var(--aap-font-xs);
+  line-height: 16px;
+}
+
+.aap-today-stat dd {
+  overflow: hidden;
+  margin: 0;
+  color: var(--aap-text);
+  font-size: var(--aap-font-lg);
+  font-weight: 600;
+  line-height: 22px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aap-today-batch-list {
+  display: flex;
+  flex-direction: column;
+  margin: 0 -8px -8px;
+  padding: 0;
+  list-style: none;
+}
+
+.aap-today-batch {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px;
+  border: 0;
+  border-radius: var(--aap-radius);
+  background: none;
+  color: var(--aap-text);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  transition: background-color 140ms ease;
+}
+
+.aap-today-batch:hover {
+  background: var(--aap-hover);
+}
+
+.aap-today-batch:focus-visible {
+  outline: 2px solid var(--aap-focus);
+  outline-offset: -2px;
+}
+
+.aap-today-batch .aap-today-icon {
+  color: var(--aap-text-placeholder);
+  transition: transform 160ms ease, color 160ms ease;
+}
+
+.aap-today-batch:hover .aap-today-icon {
+  color: var(--aap-text);
+  transform: translateX(2px);
+}
+
+.aap-today-batch-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.aap-today-batch-verb {
+  overflow: hidden;
+  font-size: var(--aap-font-base);
+  font-weight: 500;
+  line-height: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aap-today-batch-meta {
+  color: var(--aap-text-subtle);
+  font-size: var(--aap-font-xs);
+  line-height: 16px;
+}
+
+/* Batch mode: one Actor at a time. */
+.aap-today-next {
+  margin: 12px 0 0;
+  color: var(--aap-text-subtle);
+  font-size: var(--aap-font-sm);
+  line-height: 18px;
+}
+
+.aap-today-empty {
+  padding: 32px 24px;
+  border: 1px dashed var(--aap-separator);
+  border-radius: var(--aap-radius-lg);
+}
+
+/* Loading. */
+.aap-today-loading {
+  max-width: 880px;
+}
+
+.aap-today-skeleton {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  margin-top: 16px;
+  border: 1px solid var(--aap-separator);
+  border-radius: var(--aap-radius-lg);
+  background: var(--aap-card);
+}
+
+.aap-today-skeleton-row {
+  height: 68px;
+  border-top: 1px solid var(--aap-separator);
+  background: linear-gradient(90deg, transparent 0%, color-mix(in srgb, var(--aap-text) 5%, transparent) 50%, transparent 100%) no-repeat;
+  background-size: 40% 100%;
+  animation: aap-today-shimmer 1.4s ease-in-out infinite;
+}
+
+.aap-today-skeleton-row:first-child {
+  border-top: 0;
+}
+
+@keyframes aap-today-shimmer {
+  from {
+    background-position: -40% 0;
+  }
+
+  to {
+    background-position: 140% 0;
+  }
+}
+
+/* The list arrives as a short cascade. */
+.aap-today-list > .aap-today-item {
+  animation: aap-today-in 320ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.aap-today-list > .aap-today-item:nth-child(2) { animation-delay: 30ms; }
+.aap-today-list > .aap-today-item:nth-child(3) { animation-delay: 60ms; }
+.aap-today-list > .aap-today-item:nth-child(4) { animation-delay: 90ms; }
+.aap-today-list > .aap-today-item:nth-child(n + 5) { animation-delay: 120ms; }
+
+@keyframes aap-today-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (max-width: 1100px) {
+  .aap-today-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .aap-today-aside {
+    position: static;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .aap-today-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .aap-today-progress {
+    flex-basis: auto;
+    align-items: flex-start;
+  }
+
+  .aap-today-item {
+    padding: 14px 16px;
+  }
+
+  .aap-today-item-main {
+    grid-template-columns: 22px minmax(0, 1fr) auto;
+  }
+
+  .aap-today-item-main > .aap-today-avatar {
+    display: none;
+  }
+
+  .aap-today-actions,
+  .aap-today-detail {
+    margin-left: calc(22px + 14px);
+  }
+
+  .aap-today-actions {
+    flex-wrap: wrap;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aap-today *,
+  .aap-today *::before,
+  .aap-today *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
 /* ---- Account-wide run-success overview ------------------------------- */
 .aap-debugging-overview-page [class*="InsightsChartsWrapper"] {
   display: none !important;

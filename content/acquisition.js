@@ -35,8 +35,17 @@
   const HISTORICAL_REFRESH_TTL_MS = 15 * 60 * 1000;
 
   const initialParams = new URLSearchParams(location.search);
+  // Today | Triage | Table. Today is the default; a link to a specific
+  // bucket or Actor opens the triage.
+  const VIEWS = { param: "aView", views: ["today", "triage", "table"], detail: "triage", deepLinks: ["aBucket", "aActor"] };
+
+  // Today and Triage both read the triage scan; Table reads the month's rows.
+  function usesTriage(view) {
+    return view !== "table";
+  }
+
   const state = {
-    view: initialParams.get("aView") === "table" ? "table" : "triage",
+    view: window.AAP_INSIGHTS_NAV.initialView(VIEWS, initialParams),
     // The triage entry in view: a bucket key or "movers". null means the
     // changes since yesterday, else the most urgent non-empty bucket.
     selection: initialParams.get("aBucket") || null,
@@ -251,8 +260,7 @@
   function monthStartAt() {
     const period = new URLSearchParams(location.search).get("timePeriod");
     if (/^\d{4}-\d{2}$/.test(period || "")) return `${period}-01T00:00:00.000Z`;
-    const now = new Date();
-    return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}-01T00:00:00.000Z`;
+    return currentCalendarMonthStartAt();
   }
 
   function organizationScope() {
@@ -521,7 +529,9 @@
 
   function maybeScanTriage() {
     const triage = state.triage;
-    if (!triage.scope || triage.restoring || triage.scan.running || state.showOriginal || state.view !== "triage") return;
+    if (!triage.scope || triage.restoring || triage.scan.running || state.showOriginal || !usesTriage(state.view)) return;
+    // Today covers this month only; an older month's scan would never show.
+    if (state.view === "today" && triage.month !== currentCalendarMonthStartAt()) return;
     if (Date.now() < loadBlockedUntil || Date.now() - triage.scanAttemptAt < SCAN_RETRY_MS) return;
     if (triageIsFresh()) return;
     // A stale complete snapshot is refetched in full; an incomplete one
@@ -534,20 +544,8 @@
   // from the Portfolio or Quality pages), then ranks Actors so the busiest
   // are scanned first.
   async function loadTriageContext(options) {
-    const now = Date.now();
-    const month = `${new Date(now).toISOString().slice(0, 7)}-01`;
-    const previousMonth = self.AAP_PORTFOLIO_MODEL?.previousMonthKey?.(month);
-    const normalizeRows = self.AAP_PORTFOLIO_MODEL?.normalizeRows || (() => []);
-    const breakdown = (value) => value
-      ? AAP_API.actorBreakdown(value, [], options).then(normalizeRows).catch(() => null)
-      : Promise.resolve(null);
-    const [rawActors, previousRows, currentRows] = await Promise.all([
-      AAP_API.actorList(options),
-      breakdown(previousMonth),
-      breakdown(month),
-    ]);
-    const traffic = QUALITY.trafficFromRows(previousRows || [], currentRows || []);
-    return QUALITY.rankActors(normalizeActors(rawActors), traffic, now);
+    const { rawActors, traffic } = await window.AAP_INSIGHTS_NAV.loadActorTraffic(options);
+    return { actors: QUALITY.rankActors(normalizeActors(rawActors), traffic, Date.now()), traffic };
   }
 
   function settled(result, fallback) {
@@ -612,7 +610,7 @@
     }
 
     try {
-      const actors = await loadTriageContext({ priority: "foreground", tag, fresh });
+      const { actors, traffic } = await loadTriageContext({ priority: "foreground", tag, fresh });
       if (requestId !== state.triage.requestId) return;
       const now = Date.now();
       const portion = comparisonPortion(month);
@@ -621,6 +619,7 @@
         startedAt: force || !triage.snapshot.startedAt ? now : triage.snapshot.startedAt,
         complete: false,
         actors,
+        traffic,
         entries: { ...triage.snapshot.entries },
       };
       triage.snapshot = snapshot;
@@ -699,10 +698,10 @@
 
   function writeUrlState() {
     const url = new URL(location.href);
-    if (state.view === "table") url.searchParams.set("aView", "table");
-    else url.searchParams.delete("aView");
-    if (state.selection) url.searchParams.set("aBucket", state.selection);
-    else url.searchParams.delete("aBucket");
+    if (window.AAP_INSIGHTS_NAV.writeView(VIEWS, url, state.view)) {
+      if (state.selection) url.searchParams.set("aBucket", state.selection);
+      else url.searchParams.delete("aBucket");
+    }
     if (url.href !== location.href) history.replaceState(history.state, "", url.href);
   }
 
@@ -958,7 +957,7 @@
     state.view = view;
     writeUrlState();
     render();
-    if (view === "triage") maybeScanTriage();
+    if (usesTriage(view)) maybeScanTriage();
     else if (state.monthStartAt && !state.loading && !coveredIds().size) loadMoreActors(false).catch(() => {});
   }
 
@@ -978,18 +977,35 @@
     if (!refs) return;
     const now = Date.now();
     const triageView = state.view === "triage";
+    const todayView = state.view === "today";
+    const tableView = state.view === "table";
     refs.tabs.forEach((tab) => {
       const active = tab.dataset.view === state.view;
       tab.setAttribute("aria-pressed", String(active));
       tab.classList.toggle("aap-insights-nav-view-button-active", active);
     });
+    refs.today.hidden = !todayView;
     refs.triage.hidden = !triageView;
-    refs.tableArea.hidden = triageView;
-    refs.tableControls.forEach((element) => { element.hidden = triageView; });
-    if (triageView) renderTriageHeader(now);
-    else renderTable();
+    refs.tableArea.hidden = !tableView;
+    refs.tableControls.forEach((element) => { element.hidden = !tableView; });
+    refs.search.hidden = todayView;
+    if (tableView) renderTable();
+    else renderTriageHeader(now);
     if (triageView) renderTriagePane(now);
+    if (todayView) self.AAP_TODAY_VIEW.render(refs.today, { source: "acquisition", live: todayInput });
     if (!state.loading && state.actors.length && !state.triage.scan.running) window.AAP_INSIGHTS_NAV?.prefetchOtherTabs?.("acquisition");
+  }
+
+  // The Today page reads this page's live triage scan. It covers this month,
+  // so with an older month picked it says so instead.
+  function todayInput() {
+    const triage = state.triage;
+    if (triage.month && triage.month !== currentCalendarMonthStartAt()) return { unavailable: "Today covers this month. Pick the current month to see today's list." };
+    return {
+      acquisition: { snapshot: triage.snapshot, thresholds: triageThresholds().thresholds, month: triage.month },
+      traffic: triage.snapshot.traffic,
+      scan: { running: triage.scan.running && !triage.snapshot.scannedAt, done: triage.scan.done, total: triage.scan.total },
+    };
   }
 
   function renderTriageHeader(now) {
@@ -1077,7 +1093,7 @@
     const tabList = createElement("div", "aap-insights-nav-view-toggle aap-acquisition-view-toggle");
     tabList.setAttribute("role", "group");
     tabList.setAttribute("aria-label", "Acquisition view");
-    const tabs = [["triage", "Triage"], ["table", "Table"]].map(([view, label]) => {
+    const tabs = [["today", "Today"], ["triage", "Triage"], ["table", "Table"]].map(([view, label]) => {
       const tab = createElement("button", "aap-insights-nav-view-button", label);
       tab.type = "button";
       tab.dataset.view = view;
@@ -1120,7 +1136,7 @@
     refresh.title = "Fetch every Actor's acquisition data again";
     refresh.addEventListener("click", () => {
       AAP_API.forceFresh?.();
-      if (state.view === "triage") refreshTriage();
+      if (usesTriage(state.view)) refreshTriage();
       beginLoad(monthStartAt(), true);
     });
     const more = createElement("button", "aap-acquisition-more", "Load more Actors");
@@ -1160,13 +1176,16 @@
     sentinel.setAttribute("aria-hidden", "true");
     const tableArea = createElement("div", "aap-acquisition-table-area");
     tableArea.append(totalSection, actorsSection, sentinel);
-    host.append(header, controls, status, triage, tableArea);
+    const today = createElement("div", "aap-today-pane");
+    host.append(header, controls, status, today, triage, tableArea);
     window.AAP_INSIGHTS_NAV?.watchSentinel?.(sentinel, autoLoadMore);
     refs = {
       summary,
       progress,
       status,
       tabs,
+      search,
+      today,
       triage,
       tableArea,
       tableControls: [tableControls, tableActions],

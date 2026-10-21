@@ -40,6 +40,7 @@
       "js": [
         "lib/perf.js",
         "lib/context.js",
+        "lib/local-store.js",
         "lib/format.js",
         "lib/range.js",
         "lib/actor-detail.js",
@@ -48,6 +49,7 @@
         "lib/portfolio.js",
         "lib/quality-inbox.js",
         "lib/acquisition-triage.js",
+        "lib/today.js",
         "lib/api.js",
         "lib/cache.js",
         "lib/insights-nav.js",
@@ -55,6 +57,7 @@
         "content/range.js",
         "content/portfolio.js",
         "content/quality-inbox.js",
+        "content/today.js",
         "content/quality.js",
         "content/acquisition-triage.js",
         "content/acquisition.js",

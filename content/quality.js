@@ -23,10 +23,15 @@
 
   const MODEL = self.AAP_QUALITY_INBOX;
   const VIEW = self.AAP_QUALITY_INBOX_VIEW;
+  const TODAY = self.AAP_TODAY_VIEW;
 
   const initialParams = new URLSearchParams(location.search);
+  // Today | Inbox | Table. Today is the default; a link to a specific issue
+  // or Actor opens the inbox.
+  const VIEWS = { param: "qView", views: ["today", "inbox", "table"], detail: "inbox", deepLinks: ["qIssue", "qActor"] };
+
   const state = {
-    view: initialParams.get("qView") === "table" ? "table" : "inbox",
+    view: window.AAP_INSIGHTS_NAV.initialView(VIEWS, initialParams),
     // The inbox entry in view: an issue key ("ops:RELIABILITY"), "changes",
     // or "hidden". null means the highest-impact issue.
     selection: initialParams.get("qIssue") || null,
@@ -82,6 +87,14 @@
   });
 
   chrome.storage.onChanged?.addListener((changes, area) => {
+    // A decision made in another tab shows here right away; this tab's own
+    // writes are skipped, so a late echo never undoes a newer decision.
+    const key = area === "local" && state.scope ? lifecycleStorageKey(state.scope) : null;
+    const lifecycle = key ? changes[key] : null;
+    if (lifecycle && !state.restoring && !AAP_LOCAL_STORE.isEcho(key, lifecycle.newValue)) {
+      state.lifecycle = lifecycle.newValue && typeof lifecycle.newValue === "object" ? lifecycle.newValue : {};
+      render();
+    }
     if (area !== "local" || !changes[CACHE_CLEAR_KEY]) return;
     loadBlockedUntil = Date.now() + Math.random() * 2_000;
     resetScope();
@@ -92,12 +105,8 @@
     return ROUTE_RE.test(location.pathname) && !new URLSearchParams(location.search).has("actorId");
   }
 
-  function organizationScope() {
-    return self.AAP_CONTEXT?.organizationKey?.() || "personal";
-  }
-
   function viewScope() {
-    return `${organizationScope()}:${AAP_API.authScope?.() || ""}`;
+    return self.AAP_CONTEXT.accountScope();
   }
 
   function createElement(tag, className, text) {
@@ -205,7 +214,7 @@
   // never brings back a suggestion the user dismissed.
   function persistLifecycle() {
     if (!state.scope) return;
-    chrome.storage.local.set({ [lifecycleStorageKey(state.scope)]: state.lifecycle }).catch?.(() => {});
+    AAP_LOCAL_STORE.set(lifecycleStorageKey(state.scope), state.lifecycle);
   }
 
   async function restore(scope) {
@@ -252,20 +261,8 @@
   // Loads the Actor list and last/this month's actor-breakdown, then ranks
   // Actors so the busiest are scanned (and listed) first.
   async function loadContext(options) {
-    const now = Date.now();
-    const month = currentMonthKey(now);
-    const previousMonth = self.AAP_PORTFOLIO_MODEL?.previousMonthKey?.(month);
-    const normalizeRows = self.AAP_PORTFOLIO_MODEL?.normalizeRows || (() => []);
-    const breakdown = (value) => value
-      ? AAP_API.actorBreakdown(value, [], options).then(normalizeRows).catch(() => null)
-      : Promise.resolve(null);
-    const [rawActors, previousRows, currentRows] = await Promise.all([
-      AAP_API.actorList(options),
-      breakdown(previousMonth),
-      breakdown(month),
-    ]);
-    const traffic = MODEL.trafficFromRows(previousRows || [], currentRows || []);
-    return { actors: MODEL.rankActors(normalizeActors(rawActors), traffic, now), traffic };
+    const { rawActors, traffic } = await window.AAP_INSIGHTS_NAV.loadActorTraffic(options);
+    return { actors: MODEL.rankActors(normalizeActors(rawActors), traffic, Date.now()), traffic };
   }
 
   function settled(result, fallback) {
@@ -408,8 +405,8 @@
 
   // ---- Lifecycle actions ------------------------------------------------------
 
-  function onAction(id, improvementId, action) {
-    state.lifecycle = MODEL.applyAction(state.lifecycle, id, improvementId, action, Date.now());
+  function onAction(id, improvementId, action, options) {
+    state.lifecycle = MODEL.applyAction(state.lifecycle, id, improvementId, action, Date.now(), options);
     persistLifecycle();
     render();
   }
@@ -418,10 +415,10 @@
 
   function writeUrlState() {
     const url = new URL(location.href);
-    if (state.view === "table") url.searchParams.set("qView", "table");
-    else url.searchParams.delete("qView");
-    if (state.selection) url.searchParams.set("qIssue", state.selection);
-    else url.searchParams.delete("qIssue");
+    if (window.AAP_INSIGHTS_NAV.writeView(VIEWS, url, state.view)) {
+      if (state.selection) url.searchParams.set("qIssue", state.selection);
+      else url.searchParams.delete("qIssue");
+    }
     if (url.href !== location.href) history.replaceState(history.state, "", url.href);
   }
 
@@ -786,11 +783,15 @@
       tab.setAttribute("aria-pressed", String(active));
       tab.classList.toggle("aap-insights-nav-view-button-active", active);
     });
+    refs.today.hidden = state.view !== "today";
     refs.inbox.hidden = state.view !== "inbox";
     refs.tableArea.hidden = state.view !== "table";
     refs.tableControls.hidden = state.view !== "table";
+    refs.search.hidden = state.view === "today";
 
-    if (state.view === "inbox") {
+    if (state.view === "today") {
+      TODAY.render(refs.today, { source: "quality", live: todayInput });
+    } else if (state.view === "inbox") {
       const inbox = MODEL.buildInbox(actors(), state.snapshot, state.lifecycle, state.snapshot.traffic, now, { query: state.query, includeHidden: state.selection === "hidden" });
       const qualities = actors().map((actor) => state.snapshot.entries[actor.id]?.scores?.actorQuality).filter((value) => typeof value === "number");
       VIEW.renderInbox(refs.inbox, {
@@ -824,6 +825,16 @@
       renderTable(now);
     }
     if (total && !state.scan.running) window.AAP_INSIGHTS_NAV?.prefetchOtherTabs?.("quality");
+  }
+
+  // The Today page reads this page's live scan and writes decisions through
+  // the same lifecycle actions as the inbox.
+  function todayInput() {
+    return {
+      quality: { snapshot: state.snapshot, lifecycle: state.lifecycle, onAction },
+      traffic: state.snapshot.traffic,
+      scan: { running: state.scan.running && !state.snapshot.scannedAt, done: state.scan.done, total: state.scan.total },
+    };
   }
 
   // qActor from the URL scrolls to that Actor's first suggestion once the
@@ -893,7 +904,7 @@
     const tabList = createElement("div", "aap-insights-nav-view-toggle aap-quality-view-toggle");
     tabList.setAttribute("role", "group");
     tabList.setAttribute("aria-label", "Quality view");
-    const tabs = [["inbox", "Inbox"], ["table", "Table"]].map(([view, label]) => {
+    const tabs = [["today", "Today"], ["inbox", "Inbox"], ["table", "Table"]].map(([view, label]) => {
       const tab = createElement("button", "aap-insights-nav-view-button", label);
       tab.type = "button";
       tab.dataset.view = view;
@@ -942,6 +953,7 @@
     controls.append(tabList, search, tableControls, refreshButton);
 
     const status = createElement("div", "aap-quality-status");
+    const today = createElement("div", "aap-today-pane");
     const inbox = createElement("div", "aap-quality-inbox");
 
     function tableShell(label, bodyKey) {
@@ -966,11 +978,13 @@
     const actorsSection = tableShell("Actors", "body");
     tableArea.append(totalSection, actorsSection);
 
-    host.append(header, controls, status, inbox, tableArea);
+    host.append(header, controls, status, today, inbox, tableArea);
     refs = {
       summary,
       progress,
       status,
+      search,
+      today,
       inbox,
       tableArea,
       tableControls,

@@ -43,13 +43,7 @@
     return parsed.body.textContent.replace(/\s+/g, " ").trim();
   }
 
-  function count(value) {
-    return Number(value || 0).toLocaleString("en-US");
-  }
-
-  function plural(value, one, many) {
-    return `${count(value)} ${value === 1 ? one : many}`;
-  }
+  const { count, plural } = self.AAPF;
 
   function formatScore(value) {
     return value == null ? "–" : `${(value * 100).toFixed(1)}%`;
