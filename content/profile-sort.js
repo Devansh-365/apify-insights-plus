@@ -40,6 +40,7 @@
     profileStatsLoading: false,
     profileStatsError: null,
     profileStatsPromise: null,
+    profileStatsLoadedAt: 0,
     catalog: null,
     catalogSortKey: null,
     loading: false,
@@ -193,7 +194,8 @@
       const iconElement = createElement("span", "aap-profile-run-metric-icon");
       iconElement.setAttribute("aria-hidden", "true");
       iconElement.appendChild(metricIcon(icon));
-      const displayValue = loading ? "Loading…" : error ? "Unavailable" : formatCompact(value);
+      // Saved numbers stay on screen while a fresh copy loads or if it fails.
+      const displayValue = state.profileStats ? formatCompact(value) : loading ? "Loading…" : error ? "Unavailable" : formatCompact(value);
       const text = createElement("span", "aap-profile-run-metric-text");
       text.append(
         createElement("strong", "aap-profile-run-metric-value", displayValue),
@@ -202,7 +204,7 @@
       row.append(iconElement, text);
       const rankSlot = takeRankSlot(metricKey);
       if (rankSlot) row.appendChild(rankSlot);
-      if (error) row.title = error;
+      if (error) row.title = state.profileStats ? `Could not refresh: ${error}` : error;
       return row;
     });
     const headingRow = createElement("div", "aap-profile-run-metric-heading-row");
@@ -226,6 +228,7 @@
     state.profileStatsLoading = false;
     state.profileStatsError = null;
     state.profileStatsPromise = null;
+    state.profileStatsLoadedAt = 0;
   }
 
   function findProfileStatsMount() {
@@ -241,9 +244,17 @@
     let operation;
     operation = (async () => {
       try {
+        if (!state.profileStats) {
+          const saved = await savedCatalog(route);
+          if (saved && state.profileStatsRouteKey === route.key) {
+            state.profileStats = AAP_PROFILE_SORT.aggregateActorStats(saved);
+            renderProfileStats();
+          }
+        }
         const actors = await fetchCatalog(route, "default", "background");
         if (state.profileStatsRouteKey !== route.key) return;
         state.profileStats = AAP_PROFILE_SORT.aggregateActorStats(actors);
+        state.profileStatsLoadedAt = catalogCache.get(`${route.key}:default`)?.loadedAt ?? Date.now();
       } catch (error) {
         if (state.profileStatsRouteKey !== route.key) return;
         state.profileStatsError = error?.message || "Profile run statistics could not be loaded.";
@@ -280,7 +291,9 @@
       .filter((metricKey) => metricKey === "totalRuns" || metricKey === "monthlyRuns")
       .every((metricKey) => host.querySelector(`[data-aap-profile-benchmark-tag="${metricKey}"]`));
     if (hostCreated || hasLegacyBenchmarkRegion || !hasRunRankSlots) renderProfileStats();
-    if (!state.profileStats && !state.profileStatsLoading && !state.profileStatsError) loadProfileStats(route);
+    // Refresh while the profile stays open, once the shown catalog expires.
+    const due = state.profileStatsLoadedAt && Date.now() - state.profileStatsLoadedAt >= CATALOG_TTL_MS;
+    if (!state.profileStatsLoading && (due || (!state.profileStats && !state.profileStatsError))) loadProfileStats(route);
   }
 
   function formatRelativeTime(value) {
@@ -681,6 +694,18 @@
     return `profile:${routeKey}:${catalogSortKey}`;
   }
 
+  // The last saved catalog at any age, for painting before a refresh.
+  async function savedCatalog(route) {
+    const cached = catalogCache.get(`${route.key}:default`);
+    if (cached) return cached.actors;
+    try {
+      const persisted = await AAP_CACHE.getView(CATALOG_CACHE_NAME, CATALOG_TTL_MS, catalogCacheScope(route.key, "default"));
+      return persisted.hit && Array.isArray(persisted.data?.actors) ? persisted.data.actors : null;
+    } catch {
+      return null;
+    }
+  }
+
   async function fetchCatalog(route, catalogSortKey = "default", priority = "background", force = false, onProgress) {
     const normalizedSortKey = catalogSortKey === "newest" ? "newest" : "default";
     const cacheKey = `${route.key}:${normalizedSortKey}`;
@@ -691,35 +716,46 @@
     if (existing) return existing;
 
     const operation = (async () => {
+      let saved = null;
       if (!force) {
         try {
           const persisted = await AAP_CACHE.getView(CATALOG_CACHE_NAME, CATALOG_TTL_MS, cacheScope);
           const actors = persisted.hit && Array.isArray(persisted.data?.actors) ? persisted.data.actors : null;
-          if (actors) {
+          if (actors && !persisted.stale) {
             catalogCache.set(cacheKey, { actors, loadedAt: persisted.updatedAt || Date.now() });
             return actors;
           }
+          // An expired copy is only a fallback if the live catalog fails.
+          saved = actors;
         } catch {
           // A view-cache failure should fall through to the live catalog.
         }
       }
       const actors = [];
-      let offset = 0;
-      let total = null;
-      do {
-        if (onProgress) onProgress(actors.length);
-        const response = await AAP_API.publicActorStore(route.username, {
-          limit: PAGE_SIZE,
-          offset,
-          sortBy: normalizedSortKey === "newest" ? "newest" : undefined,
-          priority,
-        });
-        const page = AAP_PROFILE_SORT.normalizeStoreResponse(response, offset);
-        total = AAP_PROFILE_SORT.storeTotal(response);
-        actors.push(...page);
-        if (!page.length) break;
-        offset += page.length;
-      } while (offset < total);
+      try {
+        let offset = 0;
+        let total = null;
+        do {
+          if (onProgress) onProgress(actors.length);
+          // This catalog is cached above, so skip the request cache: its
+          // stale-while-revalidate copy could be up to an hour old.
+          const response = await AAP_API.publicActorStore(route.username, {
+            limit: PAGE_SIZE,
+            offset,
+            sortBy: normalizedSortKey === "newest" ? "newest" : undefined,
+            priority,
+            cacheMode: "no-store",
+          });
+          const page = AAP_PROFILE_SORT.normalizeStoreResponse(response, offset);
+          total = AAP_PROFILE_SORT.storeTotal(response);
+          actors.push(...page);
+          if (!page.length) break;
+          offset += page.length;
+        } while (offset < total);
+      } catch (error) {
+        if (saved) return saved;
+        throw error;
+      }
       catalogCache.set(cacheKey, { actors, loadedAt: Date.now() });
       // The normalized catalog is much smaller than the raw Store response,
       // so it remains reusable even when the raw response exceeds the API

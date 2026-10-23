@@ -7,7 +7,8 @@
  * The host page passes everything Today reads (its live scan, traffic, and
  * for quality the lifecycle and its actions) through ctx.live(); Today owns
  * only its decision store, kept in chrome.storage.local outside the cache so
- * "Clear cache" never brings back an item the user handled.
+ * "Clear cache" never brings back an item the user handled, and scoped by
+ * organization only, so a new login token or a rescan never starts it over.
  */
 (function () {
   const MODEL = self.AAP_TODAY_MODEL;
@@ -40,7 +41,7 @@
 
   // Each page keeps its own list, so the source is part of the key.
   function storeKey(source) {
-    return `${STORE_PREFIX}${source}:${self.AAP_CONTEXT.accountScope()}`;
+    return `${STORE_PREFIX}${source}:${self.AAP_CONTEXT.decisionScope()}`;
   }
 
   function resetLoaded(key) {
@@ -48,6 +49,10 @@
     loaded.pending = null;
     loaded.store = MODEL.emptyStore();
     loaded.ready = false;
+    resetUi();
+  }
+
+  function resetUi() {
     ui.expanded.clear();
     ui.batch = null;
     ui.skipped.clear();
@@ -58,14 +63,17 @@
   function ensureLoaded(key) {
     if (loaded.key !== key) resetLoaded(key);
     if (loaded.ready || loaded.pending) return;
-    loaded.pending = chrome.storage.local.get(key).catch(() => ({})).then((stored) => {
+    // Lists saved before were keyed by the login token too (`<key>:<account>`);
+    // getMigrated folds them into this one.
+    const pending = AAP_LOCAL_STORE.getMigrated(key, `${key}:`, MODEL.mergeStores).catch(() => undefined).then((stored) => {
       if (loaded.key !== key) return;
-      loaded.store = MODEL.restoreStore(stored?.[key]);
+      loaded.store = MODEL.restoreStore(stored);
       loaded.ready = true;
     }).finally(() => {
-      loaded.pending = null;
+      if (loaded.pending === pending) loaded.pending = null;
       rerender(true);
     });
+    loaded.pending = pending;
   }
 
   function saveStore(store) {
@@ -82,8 +90,10 @@
     rerender(true);
   });
 
+  // The store does not depend on the login, so a new token keeps it and
+  // only resets what the page was showing.
   AAP_API.onTokenChange?.(() => {
-    resetLoaded(null);
+    resetUi();
     rerender(true);
   });
 
@@ -537,22 +547,25 @@
       return;
     }
 
+    // The store is shared by the organization's accounts in this browser;
+    // only this account's Actors count.
+    const actorIds = new Set(input.actors.keys());
     const all = MODEL.buildCandidates({ acquisition: input.acquisition, quality: input.quality, traffic: input.traffic, now });
     const open = MODEL.openCandidates(all, loaded.store, now);
     const statusOptions = { available: [input.source], lifecycle: input.lifecycle };
     const existing = loaded.store.plan?.day === MODEL.dayKey(now) ? loaded.store.plan : null;
     const handled = existing ? MODEL.planStatus(existing, open, loaded.store, now, statusOptions).filter((entry) => entry.status !== "open").map((entry) => entry.item.key) : [];
-    const planned = MODEL.planToday(loaded.store, open, now, { sources: { [input.source]: input.scannedAt }, handled, extra: ui.extra });
+    const planned = MODEL.planToday(loaded.store, open, now, { sources: { [input.source]: input.scannedAt }, handled, extra: ui.extra, actorIds });
     if (planned.changed) saveStore({ ...loaded.store, plan: planned.plan });
     ui.extra = 0;
     const plan = planned.plan;
     const statuses = MODEL.planStatus(plan, open, loaded.store, now, statusOptions);
     const groups = MODEL.batches(open, plan);
     const canPullMore = MODEL.canExtend(plan, open);
-    const week = MODEL.weekSummary(loaded.store, now);
+    const week = MODEL.weekSummary(loaded.store, now, actorIds);
     const snoozed = input.source === "quality"
       ? Object.values(input.lifecycle).filter((record) => QUALITY.effectiveState(record, now) === "snoozed").length
-      : MODEL.snoozedCount(loaded.store, all, now);
+      : MODEL.snoozedCount(loaded.store, all, now, actorIds);
     const flagged = new Set(all.map((candidate) => candidate.actor.id));
     const quiet = Math.max(0, input.actors.size - flagged.size);
 

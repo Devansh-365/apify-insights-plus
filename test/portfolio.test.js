@@ -147,4 +147,15 @@ assert.equal(duplicated.length, 1);
 assert.equal(duplicated[0].revenue, 10);
 assert.equal(duplicated[0].runs, 5);
 
+// Pager buttons: every page when there are few, else the ends, the current
+// page and its neighbours, with null for skipped pages.
+const pages = (page, pageCount) => JSON.stringify(model.pageButtons(page, pageCount));
+assert.equal(pages(0, 1), "[0]");
+assert.equal(pages(3, 7), "[0,1,2,3,4,5,6]");
+assert.equal(pages(0, 18), "[0,1,2,3,null,17]");
+assert.equal(pages(2, 18), "[0,1,2,3,null,17]");
+assert.equal(pages(8, 18), "[0,null,7,8,9,null,17]");
+assert.equal(pages(17, 18), "[0,null,14,15,16,17]");
+assert.equal(pages(15, 18), "[0,null,14,15,16,17]");
+
 console.log("Actor portfolio analysis tests passed");

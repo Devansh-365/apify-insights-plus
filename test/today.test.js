@@ -63,14 +63,14 @@ function traffic(revenue, users, runs = 0, succeeded = runs) {
     now: NOW,
   });
   const byKey = Object.fromEntries(candidates.map((item) => [item.key, item]));
-  assert.ok(byKey["a:listing:listing"], "few reach the run form: fix the listing");
-  assert.ok(byKey["a:runform:runform"], "many reach the run form: fix the run form");
-  assert.equal(byKey["a:listing:listing"].verb, "Fix the listing");
-  assert.match(byKey["a:listing:listing"].why, /120 opened the listing, 3 opened the run form, 0 ran it/);
+  assert.ok(byKey["a:convert:listing"], "few reach the run form: fix the listing");
+  assert.ok(byKey["a:convert:runform"], "many reach the run form: fix the run form");
+  assert.equal(byKey["a:convert:listing"].verb, "Fix the listing");
+  assert.match(byKey["a:convert:listing"].why, /120 opened the listing, 3 opened the run form, 0 ran it/);
   assert.ok(!candidates.some((item) => item.actor.id === "steady"), "nothing to do on a steady Actor");
   // Target is midway between the bottom and top quarter (17.5%); 120 viewers
   // at 0% miss 21 users so far this month, about 31 projected.
-  const users = byKey["a:listing:listing"].users;
+  const users = byKey["a:convert:listing"].users;
   assert.ok(users > 28 && users < 34, `got ${users}`);
 }
 
@@ -242,7 +242,7 @@ function traffic(revenue, users, runs = 0, succeeded = runs) {
   });
   const { plan } = model.planToday(model.emptyStore(), candidates, NOW, { sources: { acquisition: 1 }, cap: 1 });
   assert.equal(model.canExtend(plan, candidates), true);
-  const second = { ...candidates[0], key: "a:runform:x", fixKey: "a:runform" };
+  const second = { ...candidates[0], key: "a:promote:x", fixKey: "a:promote" };
   assert.equal(model.canExtend(plan, [candidates[0], second]), false, "only the same Actor's other work is left");
 }
 
@@ -253,6 +253,104 @@ function traffic(revenue, users, runs = 0, succeeded = runs) {
   assert.equal(model.snoozedCount(store, [candidate], NOW), 1);
   assert.equal(model.snoozedCount(store, [{ ...candidate, users: candidate.users * 2 }], NOW), 0);
   assert.equal(model.snoozedCount(store, [], NOW), 1, "not flagged now: still snoozed");
+}
+
+// A Done item stays done when the daily rescan flips it from "fix the
+// listing" to "fix the run form": both are the same problem and share a key.
+{
+  const before = model.buildCandidates({ acquisition: acquisition({ x: entry(120, 0, { inputViewers: 3 }) }), now: NOW });
+  const after = model.buildCandidates({ acquisition: acquisition({ x: entry(120, 0, { inputViewers: 70 }) }), now: NOW });
+  assert.equal(before[0].kind, "listing");
+  assert.equal(after[0].kind, "runform");
+  assert.equal(after[0].key, before[0].key);
+  const store = model.applyDecision(model.emptyStore(), before[0], "done", NOW);
+  assert.equal(model.openCandidates(after, store, NOW + DAY).length, 0, "still done after the rescan");
+}
+
+// Today's progress survives a rescan with newer data: handled items stay on
+// the list with their status, and only untouched ones are re-picked.
+{
+  const entries = {};
+  for (let index = 0; index < 6; index++) entries[`r${index}`] = entry(200 - index * 10, 0, { inputViewers: 3 });
+  const candidates = model.buildCandidates({ acquisition: acquisition(entries), now: NOW });
+  let store = model.emptyStore();
+  store = { ...store, plan: model.planToday(store, candidates, NOW, { sources: { acquisition: 1 } }).plan };
+  store = model.applyDecision(store, candidates[0], "done", NOW);
+  store = model.applyDecision(store, candidates[1], "dismiss", NOW);
+  // The saved copy round-trips through storage between scans.
+  store = model.restoreStore(json(store));
+  const open = model.openCandidates(candidates, store, NOW);
+  const handled = model.planStatus(store.plan, open, store, NOW, { available: ["acquisition"] })
+    .filter((item) => item.status !== "open").map((item) => item.item.key);
+  const rebuilt = model.planToday(store, open, NOW + 1000, { sources: { acquisition: 2 }, handled });
+  assert.equal(rebuilt.changed, true);
+  const status = model.planStatus(rebuilt.plan, open, store, NOW + 1000, { available: ["acquisition"] });
+  assert.deepEqual(json(status.slice(0, 2).map((item) => [item.item.actorId, item.status])), [["r0", "done"], ["r1", "dismiss"]]);
+}
+
+// Items for Actors the account does not have (a deleted one, or another
+// account's in the same browser) leave the list and the gap is refilled.
+{
+  const candidates = model.buildCandidates({
+    acquisition: acquisition({ x: entry(120, 0, { inputViewers: 3 }), y: entry(110, 0, { inputViewers: 3 }) }),
+    now: NOW,
+  });
+  const plan = { day: model.dayKey(NOW), sources: { acquisition: 1 }, items: [{ key: "a:convert:gone", actorId: "gone", source: "acquisition" }] };
+  const next = model.planToday({ ...model.emptyStore(), plan }, candidates, NOW, { sources: { acquisition: 1 }, actorIds: new Set(["x", "y"]) });
+  assert.equal(next.changed, true);
+  assert.deepEqual(json(next.plan.items.map((item) => item.actorId)), ["x", "y"]);
+}
+
+// Stores saved before kinds were grouped load under the grouped keys, and
+// copies saved under older login tokens merge into one.
+{
+  const legacy = {
+    version: 1,
+    plan: { day: "2026-10-20", sources: {}, items: [{ key: "a:listing:x", actorId: "x" }] },
+    decisions: { "a:listing:x": { action: "dismiss", at: 1 }, "a:runform:x": { action: "done", at: 5 } },
+    log: [{ key: "a:runform:x", action: "done", at: 5 }],
+  };
+  const restored = model.restoreStore(legacy);
+  assert.deepEqual(Object.keys(restored.decisions), ["a:convert:x"]);
+  assert.equal(restored.decisions["a:convert:x"].action, "done", "the later decision wins");
+  assert.equal(restored.plan.items[0].key, "a:convert:x");
+  assert.equal(restored.log[0].key, "a:convert:x");
+
+  const newer = {
+    version: 1,
+    plan: { day: "2026-10-21", sources: {}, items: [{ key: "a:promote:y", actorId: "y" }] },
+    decisions: { "a:convert:x": { action: "snooze", at: 9, until: 99 }, "a:promote:y": { action: "done", at: 7 } },
+    log: [{ key: "a:runform:x", action: "done", at: 5 }, { key: "a:promote:y", action: "done", at: 7 }],
+  };
+  const merged = model.mergeStores([legacy, newer]);
+  assert.equal(merged.decisions["a:convert:x"].action, "snooze");
+  assert.equal(merged.decisions["a:promote:y"].action, "done");
+  assert.deepEqual(json(merged.log.map((entry) => entry.at)), [5, 7], "each logged action once");
+  assert.equal(merged.plan.day, "2026-10-21", "the latest day's plan");
+  assert.equal(merged.version, 2);
+  assert.deepEqual(json(model.mergeStores([merged, legacy, newer])), json(merged), "merging again changes nothing");
+
+  // Two copies that both planned today keep both lists, one item per Actor.
+  const day = "2026-10-21";
+  const mine = { version: 2, plan: { day, sources: { acquisition: 5 }, items: [{ key: "a:convert:x", actorId: "x" }, { key: "a:promote:y", actorId: "y" }] }, decisions: {}, log: [] };
+  const theirs = { version: 2, plan: { day, sources: { acquisition: 9 }, items: [{ key: "a:fading:y", actorId: "y" }, { key: "a:promote:z", actorId: "z" }] }, decisions: {}, log: [] };
+  const both = model.mergeStores([mine, theirs]).plan;
+  assert.deepEqual(json(both.items.map((item) => item.key)), ["a:convert:x", "a:promote:y", "a:promote:z"]);
+  assert.equal(both.sources.acquisition, 9);
+}
+
+// The store is shared by an organization's accounts in this browser, so
+// the week card and the snoozed count only count this account's Actors.
+{
+  const [candidate] = model.buildCandidates({ acquisition: acquisition({ x: entry(120, 0, { inputViewers: 3 }) }), now: NOW });
+  let store = model.applyDecision(model.emptyStore(), candidate, "done", NOW);
+  assert.equal(store.log[0].actorId, "x");
+  store.log.push({ key: "q:other:RELIABILITY", action: "done", at: NOW, dollars: 50, users: 3 });
+  store.decisions["a:convert:other"] = { action: "snooze", at: NOW, until: NOW + DAY };
+  assert.equal(model.weekSummary(store, NOW).done, 2);
+  assert.equal(model.weekSummary(store, NOW, new Set(["x"])).done, 1);
+  assert.equal(model.snoozedCount(store, [], NOW, new Set(["x"])), 0);
+  assert.equal(model.snoozedCount(store, [], NOW, new Set(["other"])), 1);
 }
 
 assert.equal(model.restoreStore({ version: 0 }).log.length, 0);

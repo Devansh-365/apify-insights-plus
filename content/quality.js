@@ -44,6 +44,9 @@
     expandedIssues: new Set(),
     highlightActor: initialParams.get("qActor") || null,
     scope: null,
+    // Where the lifecycle is saved: by organization only (see
+    // AAP_CONTEXT.decisionScope), so a new login token keeps every decision.
+    lifecycleKey: null,
     restoring: false,
     snapshot: MODEL.emptySnapshot(),
     previous: null,
@@ -70,6 +73,7 @@
     state.requestId++;
     state.scanTag = null;
     state.scope = null;
+    state.lifecycleKey = null;
     state.restoring = false;
     state.snapshot = MODEL.emptySnapshot();
     state.previous = null;
@@ -89,9 +93,9 @@
   chrome.storage.onChanged?.addListener((changes, area) => {
     // A decision made in another tab shows here right away; this tab's own
     // writes are skipped, so a late echo never undoes a newer decision.
-    const key = area === "local" && state.scope ? lifecycleStorageKey(state.scope) : null;
+    const key = area === "local" ? state.lifecycleKey : null;
     const lifecycle = key ? changes[key] : null;
-    if (lifecycle && !state.restoring && !AAP_LOCAL_STORE.isEcho(key, lifecycle.newValue)) {
+    if (lifecycle && !AAP_LOCAL_STORE.isEcho(key, lifecycle.newValue) && !state.restoring) {
       state.lifecycle = lifecycle.newValue && typeof lifecycle.newValue === "object" ? lifecycle.newValue : {};
       render();
     }
@@ -201,8 +205,8 @@
 
   // ---- Persistence ----------------------------------------------------------
 
-  function lifecycleStorageKey(scope) {
-    return `${LIFECYCLE_PREFIX}${scope}`;
+  function lifecycleStorageKey() {
+    return `${LIFECYCLE_PREFIX}${self.AAP_CONTEXT.decisionScope()}`;
   }
 
   function persistSnapshot() {
@@ -213,23 +217,25 @@
   // Lifecycle state lives outside the cache so eviction or "Clear cache"
   // never brings back a suggestion the user dismissed.
   function persistLifecycle() {
-    if (!state.scope) return;
-    AAP_LOCAL_STORE.set(lifecycleStorageKey(state.scope), state.lifecycle);
+    if (!state.lifecycleKey) return;
+    AAP_LOCAL_STORE.set(state.lifecycleKey, state.lifecycle);
   }
 
   async function restore(scope) {
     state.restoring = true;
+    const key = state.lifecycleKey;
     const requestId = state.requestId;
     try {
-      const [snapshot, previous, stored] = await Promise.all([
+      const [snapshot, previous, lifecycle] = await Promise.all([
         AAP_CACHE.getView?.(SNAPSHOT_VIEW, VIEW_STORE_TTL_MS, scope),
         AAP_CACHE.getView?.(PREVIOUS_VIEW, VIEW_STORE_TTL_MS, scope),
-        chrome.storage.local.get(lifecycleStorageKey(scope)).catch(() => ({})),
+        // Lifecycles saved before were keyed by the login token too
+        // (`<key>:<account>`); getMigrated folds them in.
+        AAP_LOCAL_STORE.getMigrated(key, `${key}:`, MODEL.mergeLifecycles).catch(() => undefined),
       ]);
       if (requestId !== state.requestId) return;
       if (snapshot?.hit) state.snapshot = MODEL.restoreSnapshot(snapshot.data);
       if (previous?.hit && previous.data?.scores) state.previous = previous.data;
-      const lifecycle = stored?.[lifecycleStorageKey(scope)];
       state.lifecycle = lifecycle && typeof lifecycle === "object" ? lifecycle : {};
     } catch {
       // Restoring is best effort; a scan rebuilds everything.
@@ -1034,6 +1040,7 @@
     if (state.scope !== scope) {
       resetScope();
       state.scope = scope;
+      state.lifecycleKey = lifecycleStorageKey();
       render();
       restore(scope);
       return;

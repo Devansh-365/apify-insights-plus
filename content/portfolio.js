@@ -7,7 +7,7 @@
 (function () {
   const HOST_CLASS = "aap-portfolio";
   const ACTIVE_CLASS = "aap-portfolio-active";
-  const PAGE_SIZE = 50;
+  const PAGE_SIZE = 25;
   const PREVIOUS_RETRY_MS = 60 * 1000;
   const MODEL = self.AAP_PORTFOLIO_MODEL;
 
@@ -17,7 +17,7 @@
     sort: "auto",
     direction: "desc",
     query: "",
-    limit: PAGE_SIZE,
+    page: 0,
   };
   let host = null;
   let lastInput = null;
@@ -310,15 +310,41 @@
     return tr;
   }
 
+  function pageButton(label, page, { current = false, disabled = false, ariaLabel = "" } = {}) {
+    const button = createElement("button", "aap-portfolio-page", label);
+    button.type = "button";
+    button.dataset.page = String(page);
+    if (ariaLabel) button.setAttribute("aria-label", ariaLabel);
+    if (current) button.setAttribute("aria-current", "page");
+    button.disabled = disabled;
+    return button;
+  }
+
+  function renderPager(page, pageCount) {
+    const pager = createElement("nav", "aap-portfolio-pager");
+    pager.setAttribute("aria-label", "Actor pages");
+    pager.appendChild(pageButton("‹ Prev", page - 1, { disabled: page === 0, ariaLabel: "Previous page" }));
+    for (const index of MODEL.pageButtons(page, pageCount)) {
+      if (index == null) pager.appendChild(createElement("span", "aap-portfolio-page-gap", "…"));
+      else pager.appendChild(pageButton(count(index + 1), index, { current: index === page, ariaLabel: `Page ${index + 1}` }));
+    }
+    pager.appendChild(pageButton("Next ›", page + 1, { disabled: page === pageCount - 1, ariaLabel: "Next page" }));
+    return pager;
+  }
+
   function renderTable(analysis) {
     const rows = visibleRows(analysis);
+    const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+    // A rescan can shrink the list under the page being read.
+    ui.page = Math.min(ui.page, pageCount - 1);
+    const first = ui.page * PAGE_SIZE;
     const shell = createElement("div", "aap-portfolio-table-shell");
     const scroll = createElement("div", "aap-portfolio-table-scroll");
     const table = createElement("table", "aap-portfolio-table");
     table.setAttribute("aria-label", "Actor portfolio");
     table.appendChild(renderHead());
     const body = document.createElement("tbody");
-    for (const row of rows.slice(0, ui.limit)) body.appendChild(renderRow(row));
+    for (const row of rows.slice(first, first + PAGE_SIZE)) body.appendChild(renderRow(row));
     if (!rows.length) {
       const empty = document.createElement("tr");
       const segment = MODEL.SEGMENTS.find((item) => item.key === ui.segment);
@@ -332,13 +358,14 @@
     shell.appendChild(scroll);
 
     const footer = createElement("div", "aap-portfolio-footer");
-    footer.appendChild(createElement("span", null, `Showing ${count(Math.min(rows.length, ui.limit))} of ${count(rows.length)} Actors`));
-    if (rows.length > ui.limit) {
-      const more = createElement("button", "aap-portfolio-more", `Show all ${count(rows.length)}`);
-      more.type = "button";
-      more.dataset.action = "show-all";
-      footer.appendChild(more);
-    }
+    const range = createElement(
+      "span",
+      null,
+      rows.length ? `Showing ${count(first + 1)}–${count(Math.min(rows.length, first + PAGE_SIZE))} of ${count(rows.length)} Actors` : "No Actors",
+    );
+    range.setAttribute("aria-live", "polite");
+    footer.appendChild(range);
+    if (pageCount > 1) footer.appendChild(renderPager(ui.page, pageCount));
     return [shell, footer];
   }
 
@@ -357,12 +384,12 @@
   function onHostClick(event) {
     const tab = event.target.closest("[data-segment]");
     const sort = event.target.closest("[data-sort]");
-    const action = event.target.closest("[data-action]");
+    const page = event.target.closest("[data-page]");
     if (tab) {
       ui.segment = tab.dataset.segment;
       ui.sort = "auto";
       ui.direction = "desc";
-      ui.limit = PAGE_SIZE;
+      ui.page = 0;
     } else if (sort) {
       const key = sort.dataset.sort;
       // On "All", the automatic sort is revenue, so clicking Revenue flips it.
@@ -372,8 +399,15 @@
         ui.sort = key;
         ui.direction = key === "name" ? "asc" : "desc";
       }
-    } else if (action?.dataset.action === "show-all") {
-      ui.limit = Infinity;
+      ui.page = 0;
+    } else if (page && !page.disabled) {
+      ui.page = Number(page.dataset.page);
+      renderBody();
+      // Start the new page at its first row when the table top is scrolled away.
+      const table = host.querySelector(".aap-portfolio-table-shell");
+      if (table && table.getBoundingClientRect().top < 0) table.scrollIntoView({ block: "start" });
+      host.querySelector(".aap-portfolio-page[aria-current]")?.focus({ preventScroll: true });
+      return;
     } else {
       return;
     }
@@ -397,7 +431,7 @@
       search.setAttribute("aria-label", "Filter Actors");
       search.addEventListener("input", () => {
         ui.query = search.value;
-        ui.limit = PAGE_SIZE;
+        ui.page = 0;
         renderBody();
       });
       header.append(heading, search);

@@ -11,8 +11,14 @@ const context = {
   location: { pathname: "/organization/acme/actors/insights" },
   setInterval: (callback) => intervals.push(callback),
   document: { querySelectorAll: (selector) => (selector === ".aap-insights-nav-view-toggle" ? [strayToggle] : []), querySelector: () => null },
-  chrome: { storage: { local: { set: (items) => { writes.push(items); return Promise.resolve(); } } } },
+  chrome: { storage: { local: {
+    set: (items) => { writes.push(items); Object.assign(storage, items); return Promise.resolve(); },
+    get: (keys) => Promise.resolve(Object.fromEntries([].concat(keys).filter((key) => key in storage).map((key) => [key, storage[key]]))),
+    getKeys: () => Promise.resolve(Object.keys(storage)),
+    remove: (keys) => { for (const key of [].concat(keys)) delete storage[key]; return Promise.resolve(); },
+  } } },
 };
+const storage = {};
 context.window = context.self;
 for (const file of ["lib/context.js", "lib/format.js", "lib/local-store.js", "lib/insights-nav.js"]) {
   vm.runInNewContext(fs.readFileSync(file, "utf8"), context);
@@ -22,6 +28,8 @@ const { AAP_CONTEXT, AAPF, AAP_LOCAL_STORE, AAP_INSIGHTS_NAV: NAV } = context.se
 // Account scope: organization plus signed-in account.
 context.self.AAP_API = { authScope: () => "acct" };
 assert.equal(AAP_CONTEXT.accountScope(), "org-acme:acct");
+// Decisions are scoped by organization only, so a new login token keeps them.
+assert.equal(AAP_CONTEXT.decisionScope(), "org-acme");
 
 // Whole-number formatting.
 assert.equal(AAPF.count(1234.6), "1,235");
@@ -67,4 +75,36 @@ context.location.pathname = "/organization/acme/actors/insights/actor-quality";
 intervals.forEach((sweep) => sweep());
 assert.deepEqual(removed, [], "kept on an Insights page");
 
-console.log("shared helper tests passed");
+// Saved state keyed by older login tokens is merged into the new key once,
+// and the old copies are removed; after that the new key is read as is.
+(async () => {
+  storage["d:org-a:account-1"] = { n: 1 };
+  storage["d:org-a:account-2"] = { n: 2 };
+  storage["d:org-ab:account-3"] = { n: 100 };
+  const merge = (values) => ({ n: values.reduce((sum, value) => sum + value.n, 0) });
+  assert.deepEqual(await AAP_LOCAL_STORE.getMigrated("d:org-a", "d:org-a:", merge), { n: 3 });
+  assert.deepEqual(storage["d:org-a"], { n: 3 });
+  assert.equal("d:org-a:account-1" in storage, false, "old copies are removed");
+  assert.deepEqual(storage["d:org-ab:account-3"], { n: 100 }, "another organization is left alone");
+  assert.equal(AAP_LOCAL_STORE.isEcho("d:org-a", { n: 3 }), true, "the merged write is this tab's own");
+  storage["d:org-a:account-9"] = { n: 50 };
+  assert.deepEqual(await AAP_LOCAL_STORE.getMigrated("d:org-a", "d:org-a:", merge), { n: 3 }, "once per page load");
+  // Old copies left behind (here, by an older version still running in
+  // another tab) are folded into the existing value on the next load.
+  storage["e:org"] = { n: 10 };
+  storage["e:org:account-1"] = { n: 5 };
+  assert.deepEqual(await AAP_LOCAL_STORE.getMigrated("e:org", "e:org:", merge), { n: 15 });
+  // A storage error falls back to the saved value and keeps the old copies.
+  const getKeys = context.chrome.storage.local.getKeys;
+  context.chrome.storage.local.getKeys = () => Promise.reject(new Error("quota"));
+  storage["f:org"] = { n: 1 };
+  storage["f:org:account-1"] = { n: 2 };
+  assert.deepEqual(await AAP_LOCAL_STORE.getMigrated("f:org", "f:org:", merge), { n: 1 });
+  assert.ok("f:org:account-1" in storage);
+  context.chrome.storage.local.getKeys = getKeys;
+  assert.equal(await AAP_LOCAL_STORE.getMigrated("d:none", "d:none:", merge), undefined);
+  console.log("shared helper tests passed");
+})().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});

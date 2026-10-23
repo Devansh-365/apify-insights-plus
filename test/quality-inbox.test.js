@@ -131,7 +131,9 @@ function snapshotWith(entries) {
   assert.equal(untouched["a:NO_README"].state, "open", "a failed fetch never clears suggestions");
 
   const pruned = model.reconcileLifecycle(store, snapshotWith({ b: [] }), later + 3 * DAY, { complete: true, actorIds: ["b"] });
-  assert.equal(Object.keys(pruned).some((key) => key.startsWith("a:")), false, "a complete scan drops deleted Actors");
+  assert.ok(pruned["a:NO_README"], "an unlisted Actor's records are kept: they may be another account's");
+  const longGone = model.reconcileLifecycle(store, snapshotWith({ b: [] }), later + 200 * DAY, { complete: true, actorIds: ["b"] });
+  assert.equal(Object.keys(longGone).some((key) => key.startsWith("a:")), false, "and dropped half a year after their last change");
   const partial = model.reconcileLifecycle(store, snapshotWith({ b: [] }), later + 3 * DAY, { actorIds: ["b"] });
   assert.ok(partial["a:NO_README"], "a partial scan keeps unscanned Actors");
 
@@ -209,6 +211,24 @@ function snapshotWith(entries) {
   }
   const size = JSON.stringify(snapshot).length;
   assert.ok(size < 1_500_000, `snapshot is ${size} bytes before compression`);
+}
+
+// Lifecycles saved under older login tokens merge: each suggestion keeps
+// its most recently changed record.
+{
+  const copies = [
+    { "a:X": { state: "fixing", stateChangedAt: 10 }, "a:Y": { state: "dismissed", stateChangedAt: 3 }, "c:W": { state: "open", stateChangedAt: 1 } },
+    // A later token's first scan recorded these as open on its own.
+    { "a:X": { state: "open", stateChangedAt: 40 }, "a:Y": { state: "open", stateChangedAt: 50 }, "b:Z": { state: "snoozed", stateChangedAt: 8, snoozeUntil: 99 }, "c:W": { state: "cleared", stateChangedAt: 9 } },
+  ];
+  const merged = model.mergeLifecycles(copies);
+  assert.deepEqual(JSON.parse(JSON.stringify(merged)), {
+    "a:X": { state: "fixing", stateChangedAt: 10 },
+    "a:Y": { state: "dismissed", stateChangedAt: 3 },
+    "c:W": { state: "cleared", stateChangedAt: 9 },
+    "b:Z": { state: "snoozed", stateChangedAt: 8, snoozeUntil: 99 },
+  }, "the user's decision beats a newer automatic record");
+  assert.deepEqual(model.mergeLifecycles([merged, ...copies]), merged, "merging again changes nothing");
 }
 
 console.log("quality inbox tests passed");

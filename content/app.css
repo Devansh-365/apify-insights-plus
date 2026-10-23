@@ -1403,6 +1403,7 @@ th[aria-sort="descending"] .aap-portfolio-sort {
 
 .aap-portfolio-footer {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
@@ -1411,21 +1412,48 @@ th[aria-sort="descending"] .aap-portfolio-sort {
   font-size: var(--aap-font-sm);
 }
 
-.aap-portfolio-more {
+.aap-portfolio-pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.aap-portfolio-page {
+  min-width: var(--aap-control-height);
   height: var(--aap-control-height);
-  padding: 0 12px;
+  padding: 0 10px;
   border: 1px solid var(--aap-border);
   border-radius: var(--aap-radius);
   color: var(--aap-text);
   background: var(--aap-bg);
   font: inherit;
   font-size: var(--aap-font-base);
+  font-variant-numeric: tabular-nums;
   font-weight: 500;
   cursor: pointer;
+  transition: background-color 150ms ease, border-color 150ms ease;
 }
 
-.aap-portfolio-more:hover {
+.aap-portfolio-page:hover:not(:disabled) {
   background: var(--aap-hover);
+}
+
+.aap-portfolio-page[aria-current="page"] {
+  border-color: transparent;
+  color: var(--aap-accent-soft-text);
+  background: var(--aap-accent-soft);
+  cursor: default;
+}
+
+.aap-portfolio-page:disabled:not([aria-current]) {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.aap-portfolio-page-gap {
+  min-width: 20px;
+  text-align: center;
 }
 
 .aap-portfolio-loading {
