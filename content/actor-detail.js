@@ -34,6 +34,9 @@
     retryAt: 0,
     requestId: 0,
     accordionOpen: true,
+    notFound: false,
+    // Whether the page has Apify's Actor detail layout, not just <main>.
+    actorPage: false,
   };
 
   let host = null;
@@ -47,6 +50,7 @@
   }
 
   function actorRoute() {
+    if (!AAP_CONTEXT.isPublicSite()) return null;
     const parts = location.pathname.split("/").filter(Boolean);
     if (parts.length !== 2 || ROUTE_EXCLUSIONS.has(parts[0].toLowerCase())) return null;
     let username;
@@ -314,6 +318,11 @@
 
   function render() {
     if (!host) return;
+    // A path shaped like an Actor that is not one (a template, a docs page)
+    // gets no panel rather than an error. Without the Actor layout, the
+    // panel waits for data instead of flashing a skeleton or an error.
+    host.hidden = state.notFound || (!state.actorPage && !state.data);
+    if (host.hidden) return;
     if (state.loading) {
       renderLoading();
       return;
@@ -332,14 +341,11 @@
     host.removeAttribute("aria-busy");
   }
 
-  function findMount() {
-    return document.querySelector('[class*="ActorDetailContent-Content"]')
-      || document.querySelector("main");
-  }
-
   function ensureHost(route) {
-    const mount = findMount();
+    const actorPage = document.querySelector('[class*="ActorDetailContent-Content"]');
+    const mount = actorPage || document.querySelector("main");
     if (!mount) return false;
+    state.actorPage = Boolean(actorPage);
     if (!host || !host.isConnected || host.parentElement !== mount) {
       host?.remove();
       host = createElement("section", HOST_CLASS);
@@ -354,7 +360,10 @@
       state.loadedAt = 0;
       state.retryAt = 0;
       state.accordionOpen = true;
+      state.notFound = false;
       load(route);
+    } else if (state.notFound && Date.now() < state.retryAt) {
+      render();
     } else if (!state.loading
       && (!state.data || Date.now() - state.loadedAt > REFRESH_TTL_MS)
       && (!state.error || Date.now() >= state.retryAt)) {
@@ -377,10 +386,14 @@
       if (requestId !== state.requestId || state.routeKey !== route.key) return;
       state.data = AAP_ACTOR_DETAIL.normalize(raw);
       state.loadedAt = Date.now();
+      state.notFound = false;
     } catch (error) {
       if (requestId !== state.requestId || state.routeKey !== route.key) return;
-      state.error = error?.message || "Actor statistics could not be loaded.";
-      state.retryAt = Date.now() + 30_000;
+      // 400 (not a valid Actor name) and 404 both mean this is not an Actor.
+      // Check again later in case the Actor is published meanwhile.
+      state.notFound = error?.status === 400 || error?.status === 404;
+      state.error = AAPF.errorText(error, "Actor statistics could not be loaded.");
+      state.retryAt = Date.now() + (state.notFound ? REFRESH_TTL_MS : 30_000);
     } finally {
       if (requestId === state.requestId && state.routeKey === route.key) {
         state.loading = false;
@@ -399,6 +412,8 @@
     state.loadedAt = 0;
     state.retryAt = 0;
     state.accordionOpen = true;
+    state.notFound = false;
+    state.actorPage = false;
     host?.remove();
     host = null;
     document.documentElement.classList.remove(PAGE_CLASS);

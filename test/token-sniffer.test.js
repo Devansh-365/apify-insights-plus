@@ -92,6 +92,16 @@ vm.runInNewContext(fs.readFileSync("content/token-sniffer.js", "utf8"), context)
   const rejected = events.find((event) => event.type === "aap-api-response" && event.detail.id === "x1");
   assert.equal(rejected.detail.error, "Unsupported analytics request");
 
+  // An Actor's basic info (its publish date) is allowed; other Actor paths are not.
+  window.dispatchEvent(new SimpleCustomEvent("aap-api-request", { detail: { id: "x2", url: "https://console-backend.apify.com/actor/abc123/basic-info" } }));
+  window.dispatchEvent(new SimpleCustomEvent("aap-api-request", { detail: { id: "x3", url: "https://console-backend.apify.com/actor/abc123/permissions-approval" } }));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const basicInfo = events.find((event) => event.type === "aap-api-response" && event.detail.id === "x2");
+  assert.equal(basicInfo.detail.error, undefined);
+  assert.ok(pageFetches.some((request) => request.url.endsWith("/actor/abc123/basic-info")));
+  const otherActorPath = events.find((event) => event.type === "aap-api-response" && event.detail.id === "x3");
+  assert.equal(otherActorPath.detail.error, "Unsupported analytics request");
+
   // The Console's own analytics response is teed, and the Console still gets
   // an unconsumed body.
   const response = await window.fetch("https://console-backend.apify.com/actor-analytics/profit-margin?month=2026-10-01&actorIds=");

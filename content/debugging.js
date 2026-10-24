@@ -1081,7 +1081,7 @@
         AAP_CACHE.setView?.("debugging", { actors: state.actors, rows: state.rows, total: state.total }, viewScope(monthStartAt));
       }
     } catch (error) {
-      if (requestId === state.requestId && !silent) state.error = `Couldn't load debugging data${error?.message ? `: ${error.message}` : "."}`;
+      if (requestId === state.requestId && !silent) state.error = AAPF.loadError("debugging data", error);
     } finally {
       if (requestId === state.requestId) {
         state.loading = false;
@@ -1116,7 +1116,7 @@
       state.runsNextPageToken = page.nextPageToken;
       state.runsTotal = page.totalCount;
     } catch (error) {
-      if (requestId === state.requestId) state.runsError = `Couldn't load User runs${error?.message ? `: ${error.message}` : "."}`;
+      if (requestId === state.requestId) state.runsError = AAPF.loadError("User runs", error);
     } finally {
       if (requestId === state.requestId) {
         state.runsLoading = false;

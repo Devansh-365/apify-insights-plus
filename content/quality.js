@@ -251,7 +251,7 @@
   // ---- Scan -----------------------------------------------------------------
 
   function snapshotIsFresh(now = Date.now()) {
-    return state.snapshot.complete && now - state.snapshot.scannedAt < MODEL.ENTRY_FRESH_MS;
+    return state.snapshot.complete && now - state.snapshot.scannedAt < MODEL.ENTRY_FRESH_MS && !MODEL.needsRescan(state.snapshot, now);
   }
 
   function maybeScan() {
@@ -279,11 +279,15 @@
     return results.find((result) => result.status === "rejected" && /cancelled/i.test(result.reason?.message || ""));
   }
 
-  async function fetchActor(actor, options) {
+  // The publish date tells a new Actor's placeholder score from a real one.
+  // It never changes once known, so only Actors without one fetch it.
+  async function fetchActor(actor, previousEntry, options) {
+    const publishedAt = MODEL.knownPublishedAt(previousEntry);
     const results = await Promise.allSettled([
       AAP_API.actorQualityScores(actor.id, options),
       AAP_API.actorQualityRecommendations(actor.id, options),
       AAP_API.actorQualityBusinessValue(actor.id, options),
+      publishedAt === undefined ? AAP_API.actorBasicInfo(actor.id, options) : null,
     ]);
     const cancelled = cancelledError(results);
     if (cancelled) throw cancelled.reason;
@@ -291,7 +295,9 @@
       scores: settled(results[0], null),
       recommendations: settled(results[1], null),
       businessValue: settled(results[2], null),
-      failed: results.some((result) => result.status === "rejected"),
+      basicInfo: settled(results[3], null),
+      publishedAt,
+      failed: results.slice(0, 3).some((result) => result.status === "rejected"),
     };
   }
 
@@ -331,19 +337,22 @@
         entries: { ...state.snapshot.entries },
       };
       state.snapshot = snapshot;
-      const plan = MODEL.planScan(context.actors, snapshot, now, { force });
+      const plan = MODEL.planScan(context.actors, snapshot, now, { force, isFresh: MODEL.qualityEntryIsFresh });
       state.scan.total = plan.length;
       render();
 
       let sincePersist = 0;
       const onActor = async (actor, priority) => {
-        const result = await fetchActor(actor, { priority, tag, fresh });
-        if (requestId !== state.requestId) return;
         const previousEntry = snapshot.entries[actor.id];
+        const result = await fetchActor(actor, previousEntry, { priority, tag, fresh });
+        if (requestId !== state.requestId) return;
         const entry = MODEL.compactEntry(actor, result, Date.now());
-        // A failed fetch keeps the last good data instead of blanking it.
-        snapshot.entries[actor.id] = entry.failed && previousEntry && !previousEntry.failed
-          ? { ...previousEntry, failed: true }
+        // A failed fetch keeps the last good data instead of blanking it,
+        // unless that data was a placeholder or the Actor is now pending.
+        const keepPrevious = entry.failed && previousEntry && !previousEntry.failed && !previousEntry.pending
+          && !MODEL.predatesPublishDates(previousEntry) && !entry.pending;
+        snapshot.entries[actor.id] = keepPrevious
+          ? { ...previousEntry, publishedAt: entry.publishedAt ?? previousEntry.publishedAt, failed: true }
           : entry;
         state.scan.done++;
         if (entry.failed) state.scan.failed++;
@@ -384,7 +393,7 @@
     } catch (error) {
       if (requestId !== state.requestId) return;
       if (!/cancelled/i.test(error?.message || "")) {
-        state.error = `Couldn't load Actor quality data${error?.message ? `: ${error.message}` : "."}`;
+        state.error = AAPF.loadError("Actor quality data", error);
       }
       persistSnapshot();
     } finally {
@@ -593,8 +602,28 @@
     return cell;
   }
 
+  // Apify shows no score for a just-published Actor, so neither does the
+  // table: its placeholder score and suggestions are not real.
+  const PENDING_TEXT = {
+    new: ["Pending", (entry, now) => (now >= entry.publishedAt + MODEL.SCORE_DELAY_MS ? "score due; refresh to load it" : `published ${VIEW.relativeTime(entry.publishedAt, now)}`)],
+    unpublished: ["Not published", () => "no Store score"],
+    unscored: ["Pending", () => "no score from Apify yet"],
+  };
+
+  function pendingCell(entry, now) {
+    const [label, detail] = PENDING_TEXT[entry.pending] || PENDING_TEXT.unscored;
+    const cell = createElement("td", "aap-quality-score");
+    cell.title = "Apify shows an Actor's quality score and suggestions a day after it is first published.";
+    cell.append(createElement("strong", "aap-quality-empty", label), createElement("small", null, detail(entry, now)));
+    return cell;
+  }
+
   function setupCell(scores) {
     const cell = createElement("td", "aap-quality-setup");
+    if (!scores) {
+      cell.appendChild(createElement("span", "aap-quality-empty", "–"));
+      return cell;
+    }
     const badges = createElement("span", "aap-quality-setup-list");
     for (const [label, present] of [["Input", scores?.hasInputSchema], ["Output", scores?.hasOutputSchema], ["README", scores?.hasReadme]]) {
       const badge = createElement("span", `aap-quality-badge ${present ? "aap-quality-badge-good" : "aap-quality-badge-missing"}`, label);
@@ -681,7 +710,9 @@
     const scores = row.entry.scores;
     element.append(
       actorCell(row.actor),
-      qualityCell(number(scores?.actorQuality), formatPercentile(number(scores?.actorQualityPercentile)), row.entry.failed),
+      row.entry.pending
+        ? pendingCell(row.entry, Date.now())
+        : qualityCell(number(scores?.actorQuality), formatPercentile(number(scores?.actorQualityPercentile)), row.entry.failed),
       setupCell(scores),
       suggestionsCell(row),
       impactCell(row.level),
@@ -702,7 +733,7 @@
     const succeeded = rows.reduce((sum, row) => sum + (state.snapshot.traffic[row.actor.id]?.current?.succeeded || 0), 0);
     const element = document.createElement("tr");
     const setup = createElement("td", "aap-quality-setup");
-    setup.append(createElement("strong", null, `${setupReady}/${rows.length}`), createElement("small", null, "Actors fully set up"));
+    setup.append(createElement("strong", null, `${setupReady}/${scanned.length}`), createElement("small", null, "Actors fully set up"));
     const suggestionCell = createElement("td", "aap-quality-insights aap-quality-improvements");
     suggestionCell.append(createElement("strong", null, formatInteger(suggestions)), createElement("small", null, "open suggestions"));
     element.append(

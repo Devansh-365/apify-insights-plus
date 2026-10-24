@@ -10,6 +10,8 @@ const DAY = 24 * 60 * 60 * 1000;
 // Oct 19: past the pace threshold, in a 31-day month.
 const NOW = Date.UTC(2026, 9, 19, 12);
 const EARLY = Date.UTC(2026, 9, 3, 12);
+// Long published, so its scores are real.
+const PUBLISHED = NOW - 90 * DAY;
 
 function actor(id, title = `Actor ${id}`) {
   return { id, title, name: id, username: "dev", pictureUrl: "" };
@@ -53,6 +55,7 @@ function snapshotWith(entries) {
     scores: { actorQuality: 0.81234567, totalUsersSnapshotDay3Percentile: 0.5, readmeQuality: 0.4 },
     recommendations: { praises: [{ title: "Fast" }], improvements: [] },
     businessValue: [],
+    publishedAt: PUBLISHED,
   }, NOW);
   assert.equal(entry.scores.actorQuality, 0.8123, "scores are rounded");
   assert.equal(entry.scores.totalUsersSnapshotDay3Percentile, undefined, "noisy popularity snapshots are not stored");
@@ -185,13 +188,152 @@ function snapshotWith(entries) {
   snapshot.entries.a = { scores: { actorQuality: 0.7, readmeQuality: 0.4, runSuccessRate: 0.95 } };
   snapshot.entries.b = { scores: { actorQuality: 0.9, readmeQuality: 0.9 } };
   snapshot.entries.c = { scores: { actorQuality: 0.85 } };
-  const previous = { a: { actorQuality: 0.8, readmeQuality: 0.8, runSuccessRate: 0.96 }, b: { actorQuality: 0.9, readmeQuality: 0.9 } };
+  const previous = { a: { actorQuality: 0.8, readmeQuality: 0.8, runSuccessRate: 0.952 }, b: { actorQuality: 0.9, readmeQuality: 0.9 } };
   const movements = model.diffScores(actors, snapshot, previous);
   assert.equal(movements.length, 1, "unchanged and new Actors are not movements");
   assert.equal(movements[0].actor.id, "a");
   assert.ok(Math.abs(movements[0].delta + 0.1) < 1e-9);
-  assert.deepEqual([...movements[0].drivers.map((item) => item.key)], ["readmeQuality"], "small sub-score wobble is ignored");
+  assert.equal(movements[0].reason, "drivers");
+  assert.deepEqual([...movements[0].drivers.map((item) => item.key)], ["readmeQuality"], "sub-score wobble under half a point is ignored");
   assert.deepEqual([...model.diffScores(actors, snapshot, null)], []);
+}
+
+// A small overall move is explained by the small sub-score moves behind it,
+// biggest first, with yes/no sub-scores marked as flags.
+{
+  const snapshot = model.emptySnapshot();
+  snapshot.entries.a = { scores: { actorQuality: 0.825, runSuccessRate: 0.93, maintenanceFrequency: 0.71, hasOutputSchema: 1, readmeQuality: 0.6 } };
+  const previous = { a: { actorQuality: 0.844, runSuccessRate: 0.96, maintenanceFrequency: 0.72, hasOutputSchema: 0, readmeQuality: 0.6 } };
+  const [movement] = model.diffScores([actor("a")], snapshot, previous);
+  assert.equal(movement.reason, "drivers");
+  assert.deepEqual([...movement.drivers.map((item) => item.key)], ["hasOutputSchema", "runSuccessRate", "maintenanceFrequency"]);
+  assert.equal(movement.drivers[0].flag, true);
+  assert.equal(movement.drivers[1].flag, false);
+}
+
+// No sub-score moved: Apify recalculated the score. Without saved sub-scores
+// there is nothing to compare.
+{
+  const snapshot = model.emptySnapshot();
+  snapshot.entries.a = { scores: { actorQuality: 0.798, actorQualityPercentile: 0.62, readmeQuality: 0.7 } };
+  snapshot.entries.b = { scores: { actorQuality: 0.816, readmeQuality: 0.7 } };
+  const previous = { a: { actorQuality: 0.779, actorQualityPercentile: 0.55, readmeQuality: 0.7 }, b: { actorQuality: 0.796 } };
+  const [a, b] = [...model.diffScores([actor("a"), actor("b")], snapshot, previous)].sort((left, right) => left.actor.id.localeCompare(right.actor.id));
+  assert.equal(a.reason, "recalculated");
+  assert.deepEqual({ ...a.percentile }, { before: 0.55, now: 0.62 });
+  assert.equal(b.reason, "incomplete");
+  assert.equal(b.missing, "before");
+  assert.equal(b.percentile, null);
+}
+
+// Review cases: a sub-score wobble alone is not a change; a sub-score in only
+// one scan is never called a recalculation; a missing current scan is named;
+// a small percentile nudge is ignored.
+{
+  const snapshot = model.emptySnapshot();
+  snapshot.entries.wobble = { scores: { actorQuality: 0.8, runSuccessRate: 0.955 } };
+  snapshot.entries.added = { scores: { actorQuality: 0.8, readmeQuality: 0.7, hasOutputSchema: 1, actorQualityPercentile: 0.556 } };
+  snapshot.entries.empty = { scores: { actorQuality: 0.83 } };
+  const previous = {
+    wobble: { actorQuality: 0.8, runSuccessRate: 0.96 },
+    added: { actorQuality: 0.78, readmeQuality: 0.7, actorQualityPercentile: 0.551 },
+    empty: { actorQuality: 0.8, readmeQuality: 0.7 },
+  };
+  const movements = model.diffScores([actor("wobble"), actor("added"), actor("empty")], snapshot, previous);
+  const byId = Object.fromEntries(movements.map((item) => [item.actor.id, item]));
+  assert.equal(byId.wobble, undefined, "a sub-score wobble with no overall change is not listed");
+  assert.equal(byId.added.reason, "incomplete", "a sub-score missing from the old scan is not a recalculation");
+  assert.equal(byId.added.missing, "some");
+  assert.equal(byId.added.percentile, null, "a percentile nudge from other Actors is ignored");
+  assert.equal(byId.empty.reason, "incomplete");
+  assert.equal(byId.empty.missing, "now");
+  // A big sub-score move still shows even when the overall score held.
+  snapshot.entries.wobble.scores.runSuccessRate = 0.85;
+  assert.equal(model.diffScores([actor("wobble")], snapshot, previous)[0].reason, "drivers");
+}
+
+// Yes/no sub-scores sent as booleans are kept as 1 and 0.
+{
+  const entry = model.compactEntry(actor("a"), { scores: { actorQuality: 0.5, hasReadme: true, hasOutputSchema: false }, publishedAt: PUBLISHED }, NOW);
+  assert.equal(entry.scores.hasReadme, 1);
+  assert.equal(entry.scores.hasOutputSchema, 0);
+}
+
+// A just-published Actor has only placeholder scores and suggestions, so
+// they are kept out until Apify shows a real score a day after publishing.
+{
+  const raw = {
+    scores: { actorQuality: 0.324, actorQualityPercentile: 0.04, permissionLevel: 0 },
+    recommendations: { praises: [{ title: "Fast" }], improvements: [{ id: "PERMISSION_LEVEL", title: "Use limited permissions", description: "" }] },
+    businessValue: [],
+  };
+  const fresh = model.compactEntry(actor("new"), { ...raw, basicInfo: { isPublic: true, firstPublishedAt: new Date(NOW - 3 * 60 * 60 * 1000).toISOString() } }, NOW);
+  assert.equal(fresh.pending, "new");
+  assert.equal(fresh.publishedAt, NOW - 3 * 60 * 60 * 1000);
+  assert.equal(fresh.scores, null);
+  assert.equal(fresh.improvements, null);
+  assert.deepEqual([...fresh.praises], []);
+
+  const due = model.compactEntry(actor("old"), { ...raw, basicInfo: { isPublic: true, firstPublishedAt: new Date(NOW - 2 * DAY).toISOString() } }, NOW);
+  assert.equal(due.pending, null);
+  assert.equal(due.improvements[0].id, "PERMISSION_LEVEL");
+
+  const unpublished = model.compactEntry(actor("private"), { ...raw, basicInfo: { isPublic: false } }, NOW);
+  assert.equal(unpublished.pending, "unpublished");
+  assert.equal(unpublished.publishedAt, null);
+  // A public Actor without a publish date keeps its scores.
+  const undated = model.compactEntry(actor("x"), { ...raw, basicInfo: { isPublic: true } }, NOW);
+  assert.equal(undated.pending, null);
+  assert.equal(undated.scores.actorQuality, 0.324);
+  // Basic info that failed to load may hide a placeholder: the entry fails
+  // and shows nothing, so the scan keeps the last good data instead.
+  const unknown = model.compactEntry(actor("x"), { ...raw, basicInfo: null }, NOW);
+  assert.equal(unknown.failed, true);
+  assert.equal(unknown.scores, null);
+  assert.equal(unknown.improvements, null);
+  assert.equal(unknown.publishedAt, null);
+  assert.equal(model.compactEntry(actor("x"), { ...raw, scores: { hasReadme: true }, publishedAt: PUBLISHED }, NOW).pending, "unscored");
+
+  // A known date is reused instead of refetched.
+  assert.equal(model.knownPublishedAt(due), NOW - 2 * DAY);
+  assert.equal(model.knownPublishedAt(unpublished), undefined);
+  assert.equal(model.knownPublishedAt(undefined), undefined);
+  const reused = model.compactEntry(actor("old"), { ...raw, publishedAt: NOW - 2 * DAY }, NOW);
+  assert.equal(reused.pending, null);
+
+  // Placeholders never reach the inbox, Today, or score changes.
+  const snapshot = model.emptySnapshot();
+  snapshot.entries.new = fresh;
+  snapshot.entries.old = due;
+  const inbox = model.buildInbox([actor("new"), actor("old")], snapshot, {}, {}, NOW);
+  assert.equal(inbox.actorsWithSuggestions, 1);
+  assert.deepEqual(Object.keys(model.scoresMap(snapshot)), ["old"]);
+  const lifecycle = model.reconcileLifecycle({
+    "new:PERMISSION_LEVEL": { state: "open", firstSeen: NOW - DAY, stateChangedAt: NOW - DAY },
+    "new:NO_README": { state: "dismissed", firstSeen: NOW - DAY, stateChangedAt: NOW - DAY },
+  }, snapshot, NOW);
+  assert.equal(lifecycle["new:PERMISSION_LEVEL"], undefined, "placeholder records are dropped so real suggestions start New");
+  assert.equal(lifecycle["new:NO_README"].state, "dismissed", "the user's own decisions stay");
+  assert.equal(model.diffScores([actor("new")], snapshot, { new: { actorQuality: 0.3 } }).length, 0);
+
+  // Quality scans re-fetch entries saved before publish dates were tracked
+  // and new Actors once their score is due; other scans keep the plain rule.
+  const actors = [actor("new"), actor("old"), actor("legacy")];
+  snapshot.entries.legacy = { id: "legacy", scores: { actorQuality: 0.5 }, improvements: [], failed: false, fetchedAt: NOW };
+  const plan = (now) => [...model.planScan(actors, snapshot, now, { isFresh: model.qualityEntryIsFresh }).map((item) => item.id)];
+  assert.deepEqual(plan(NOW), ["legacy"]);
+  assert.deepEqual(plan(NOW + 22 * 60 * 60 * 1000), ["new", "legacy"]);
+  assert.deepEqual([...model.planScan(actors, snapshot, NOW).map((item) => item.id)], [], "the default rule ignores publish dates");
+  // Either case also makes a saved scan due for a full rescan; a failed
+  // entry is left to the retry flow.
+  assert.equal(model.needsRescan(snapshot, NOW), true, "an entry from before publish dates");
+  delete snapshot.entries.legacy;
+  assert.equal(model.needsRescan(snapshot, NOW), false);
+  assert.equal(model.needsRescan(snapshot, NOW + 22 * 60 * 60 * 1000), true, "a new Actor's score is due");
+  snapshot.entries.broken = { id: "broken", failed: true, fetchedAt: NOW };
+  assert.equal(model.needsRescan(snapshot, NOW), false);
+  assert.equal(model.predatesPublishDates({ id: "x" }), true);
+  assert.equal(model.predatesPublishDates(due), false);
 }
 
 // A 500-Actor snapshot stays well inside the 2 MB view-entry limit.
@@ -207,6 +349,7 @@ function snapshotWith(entries) {
         improvements: [{ id: "README_QUALITY", title: "Improve your README", description: "d".repeat(400) }],
       },
       businessValue: [{ id: "TOTAL_USERS", title: "Grow your user base", description: "d".repeat(400), descriptionDetail: "e".repeat(400), valueLift: 0.1 }],
+      publishedAt: PUBLISHED,
     }, NOW);
   }
   const size = JSON.stringify(snapshot).length;

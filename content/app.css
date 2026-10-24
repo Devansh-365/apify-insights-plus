@@ -2326,6 +2326,11 @@ th[aria-sort="descending"] .aap-portfolio-sort {
   font-size: var(--aap-font-sm);
 }
 
+.aap-quality-inbox-driver {
+  display: block;
+  line-height: 1.5;
+}
+
 .aap-portfolio-table tbody tr.aap-quality-inbox-highlight {
   background: var(--aap-accent-soft);
 }

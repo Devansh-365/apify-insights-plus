@@ -58,7 +58,7 @@
   }
 
   function profileRoute() {
-    return AAP_PROFILE_SORT.profileRoute(location.pathname);
+    return AAP_CONTEXT.isPublicSite() ? AAP_PROFILE_SORT.profileRoute(location.pathname) : null;
   }
 
   function responseTotal(response) {
@@ -249,7 +249,7 @@
         state.liveFailed = true;
         if (!state.targetBuilder) {
           state.targetBuilderStatus = "unavailable";
-          state.scanError = error?.message || "The profile Actor data could not be loaded.";
+          state.scanError = AAPF.errorText(error, "The profile Actor data could not be loaded.");
         }
       } finally {
         if (state.routeKey === routeKey) {
@@ -292,7 +292,7 @@
           // A failed recheck keeps a copy that is still within its day.
           state.snapshotStale = recheck ? snapshotTooOld(previousSnapshot) : true;
         }
-        state.scanError = error?.message || "The shared benchmark snapshot could not be loaded.";
+        state.scanError = AAPF.errorText(error, "The shared benchmark snapshot could not be loaded.");
       }
 
       if (state.routeKey !== routeKey) return;
@@ -435,7 +435,7 @@
       .catch((error) => {
         if (activeScan === operation) activeScan = null;
         state.scanStatus = "incomplete";
-        state.scanError = error?.message || "Scan incomplete — no rank published";
+        state.scanError = AAPF.errorText(error, "Scan incomplete — no rank published");
         state.snapshotStale = Boolean(state.snapshot) || state.snapshotStale;
         render();
         return null;

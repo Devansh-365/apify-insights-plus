@@ -109,7 +109,7 @@
       } else if (
         url.pathname !== "/actors/find-users-owned-actors-by-text"
         && !/^\/actor-quality\/(?:scores|praises-and-improvements|business-value-improvements)\/[^/]+$/.test(url.pathname)
-        && !/^\/actor\/[^/]+\/metrics$/.test(url.pathname)
+        && !/^\/actor\/[^/]+\/(?:metrics|basic-info)$/.test(url.pathname)
       ) {
         return null;
       }

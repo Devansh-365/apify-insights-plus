@@ -30,11 +30,27 @@ context.self.AAP_API = { authScope: () => "acct" };
 assert.equal(AAP_CONTEXT.accountScope(), "org-acme:acct");
 // Decisions are scoped by organization only, so a new login token keeps them.
 assert.equal(AAP_CONTEXT.decisionScope(), "org-acme");
+// Public Actor and profile pages exist only on the public site.
+assert.equal(AAP_CONTEXT.isPublicSite("apify.com"), true);
+assert.equal(AAP_CONTEXT.isPublicSite("www.apify.com"), true);
+assert.equal(AAP_CONTEXT.isPublicSite("console.apify.com"), false);
 
 // Whole-number formatting.
 assert.equal(AAPF.count(1234.6), "1,235");
 assert.equal(AAPF.plural(1.2, "user", "users"), "1 user");
 assert.equal(AAPF.plural(3, "user", "users"), "3 users");
+
+// A reloaded extension gets a way out instead of Chrome's raw message.
+const invalidated = new Error("Extension context invalidated.");
+assert.equal(AAPF.extensionReloaded(invalidated), true);
+assert.equal(AAPF.extensionReloaded("Error: Extension context invalidated."), true);
+assert.equal(AAPF.extensionReloaded(new Error("HTTP 500")), false);
+assert.equal(AAPF.loadError("Actor quality data", invalidated), "Apify Insights Plus was reloaded or updated. Reload this page to load Actor quality data.");
+assert.equal(AAPF.loadError("Actor quality data", new Error("HTTP 500")), "Couldn't load Actor quality data: HTTP 500");
+assert.equal(AAPF.loadError("Actor data", null), "Couldn't load Actor data.");
+assert.equal(AAPF.errorText(invalidated, "fallback"), "Apify Insights Plus was reloaded or updated. Reload this page to continue.");
+assert.equal(AAPF.errorText(new Error("HTTP 404"), "fallback"), "HTTP 404");
+assert.equal(AAPF.errorText(undefined, "fallback"), "fallback");
 assert.equal(AAPF.wholeMoney(0.4), "<$1");
 assert.equal(AAPF.wholeMoney(1520.2), "$1,520");
 

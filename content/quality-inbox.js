@@ -49,6 +49,12 @@
     return value == null ? "–" : `${(value * 100).toFixed(1)}%`;
   }
 
+  function formatPercentile(value) {
+    const rank = Math.round(value * 100);
+    const suffix = rank % 100 >= 11 && rank % 100 <= 13 ? "th" : { 1: "st", 2: "nd", 3: "rd" }[rank % 10] || "th";
+    return `${rank}${suffix} pct`;
+  }
+
   function formatMoney(value) {
     if (!value) return "$0";
     return value >= 100 ? `$${Math.round(value).toLocaleString("en-US")}` : `$${value.toFixed(2)}`;
@@ -271,7 +277,7 @@
     const percentile = item.entry?.scores?.actorQualityPercentile;
     row.append(
       actorCell(item.actor, input.actorHref(item.actor), signals),
-      valueCell(formatScore(item.entry?.scores?.actorQuality ?? null), percentile != null ? `${Math.round(percentile * 100)}th pct` : ""),
+      valueCell(formatScore(item.entry?.scores?.actorQuality ?? null), percentile != null ? formatPercentile(percentile) : ""),
       valueCell(revenue.basis ? formatMoney(revenue.value) : "–", revenue.basis || "no revenue"),
       valueCell(runs ? count(runs) : "–", "this month"),
       impactCell(item, max),
@@ -362,6 +368,69 @@
     return panel;
   }
 
+  function subScoreValue(value) {
+    // Sub-scores are 0–1 like the overall score; anything else is shown as is.
+    return value >= 0 && value <= 1 ? `${Math.round(value * 100)}%` : String(Math.round(value * 100) / 100);
+  }
+
+  // A setting rather than a quality: neither direction is better.
+  const NEUTRAL_KEYS = new Set(["isPPEPlatformUsagePaidByUser"]);
+
+  function driverText(driver) {
+    if (NEUTRAL_KEYS.has(driver.key)) return `${driver.label}: ${driver.before ? "yes" : "no"} → ${driver.now ? "yes" : "no"}`;
+    if (driver.flag) return `${driver.label} ${driver.now > driver.before ? "added" : "removed"}`;
+    return `${driver.label} ${subScoreValue(driver.before)} → ${subScoreValue(driver.now)}`;
+  }
+
+  function driverLine(driver) {
+    if (NEUTRAL_KEYS.has(driver.key)) return createElement("span", "aap-quality-inbox-driver", driverText(driver));
+    const down = driver.now < driver.before;
+    return createElement("span", `aap-quality-inbox-driver ${down ? "aap-portfolio-bad" : "aap-portfolio-good"}`, `${down ? "↓" : "↑"} ${driverText(driver)}`);
+  }
+
+  const MISSING_TEXT = {
+    before: "The earlier scan has no sub-scores to compare. The next scan will explain changes.",
+    now: "This scan returned no sub-scores, so the change can't be explained yet.",
+    some: "Some sub-scores are missing from one of the scans, so the change can't be fully explained.",
+  };
+
+  // One line per sub-score that moved, coloured by direction; otherwise a
+  // plain statement of why the score changed. A percentile move follows.
+  function whatMoved(movement) {
+    const lines = movement.reason === "drivers"
+      ? movement.drivers.map(driverLine)
+      : [createElement(
+        "span",
+        "aap-quality-inbox-driver",
+        movement.reason === "recalculated"
+          ? "No sub-score changed. Apify recalculated the overall score; nothing to fix."
+          : MISSING_TEXT[movement.missing] || MISSING_TEXT.some,
+      )];
+    if (movement.percentile) {
+      lines.push(createElement(
+        "span",
+        "aap-quality-inbox-driver aap-portfolio-detail",
+        `${formatPercentile(movement.percentile.before)} → ${formatPercentile(movement.percentile.now)} among Store Actors`,
+      ));
+    }
+    return lines;
+  }
+
+  function changesDescription(movements) {
+    const explained = movements.filter((movement) => movement.reason === "drivers").length;
+    const recalculated = movements.filter((movement) => movement.reason === "recalculated").length;
+    const unexplained = movements.length - explained - recalculated;
+    const parts = [];
+    if (explained) parts.push("Each change lists the sub-scores that moved most. Red ones lowered the score.");
+    if (recalculated) {
+      parts.push(recalculated === movements.length
+        ? "No sub-score changed, so Apify recalculated these scores. Nothing here needs a fix."
+        : `${plural(recalculated, "Actor", "Actors")} moved with no sub-score change, so Apify recalculated ${recalculated === 1 ? "its score" : "their scores"}.`);
+    }
+    if (unexplained) parts.push(`${plural(unexplained, "change", "changes")} can't be explained until both scans have sub-scores.`);
+    return parts.join(" ");
+  }
+
   function changesDetail(input) {
     const panel = createElement("section", "aap-quality-inbox-detail");
     panel.setAttribute("aria-label", "Score changes");
@@ -372,14 +441,12 @@
       const change = createElement("td");
       change.appendChild(createElement("strong", `aap-portfolio-value ${down ? "aap-portfolio-bad" : "aap-portfolio-good"}`, `${down ? "↓" : "↑"} ${Math.abs(movement.delta * 100).toFixed(1)} pts`));
       const why = createElement("td", "aap-portfolio-left aap-quality-inbox-why");
-      why.textContent = movement.drivers.length
-        ? movement.drivers.map((driver) => `${driver.label} ${driver.before.toFixed(2)} → ${driver.now.toFixed(2)}`).join(" · ")
-        : "No single sub-score moved much; likely a Store-wide recalculation";
+      why.append(...whatMoved(movement));
       row.append(actorCell(movement.actor, input.actorHref(movement.actor), []), valueCell(formatScore(movement.before)), valueCell(formatScore(movement.now)), change, why);
       body.appendChild(row);
     }
     panel.append(
-      detailHeader("Review", "Score changes", null, "Each change is explained by the sub-scores that moved most.", input.previousCapturedAt ? `Since the scan on ${shortDate(input.previousCapturedAt)}` : null),
+      detailHeader("Review", "Score changes", null, changesDescription(input.movements), input.previousCapturedAt ? `Since the scan on ${shortDate(input.previousCapturedAt)}` : null),
       shell,
     );
     return panel;

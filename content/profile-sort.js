@@ -61,7 +61,7 @@
   }
 
   function profileRoute() {
-    return AAP_PROFILE_SORT.profileRoute(location.pathname);
+    return AAP_CONTEXT.isPublicSite() ? AAP_PROFILE_SORT.profileRoute(location.pathname) : null;
   }
 
   function headingText(element) {
@@ -257,7 +257,7 @@
         state.profileStatsLoadedAt = catalogCache.get(`${route.key}:default`)?.loadedAt ?? Date.now();
       } catch (error) {
         if (state.profileStatsRouteKey !== route.key) return;
-        state.profileStatsError = error?.message || "Profile run statistics could not be loaded.";
+        state.profileStatsError = AAPF.errorText(error, "Profile run statistics could not be loaded.");
       } finally {
         if (state.profileStatsRouteKey === route.key) {
           state.profileStatsLoading = false;
@@ -325,7 +325,10 @@
   }
 
   function metricDisplay(actor, key) {
-    return key === "newest" ? formatCreatedAt(actor) : formatCompact(metricValue(actor, key));
+    if (key === "newest") return formatCreatedAt(actor);
+    // The Store gives no update date, only the order: show the place in it.
+    if (key === "updated") return actor?.index === 0 ? "Latest" : `#${(actor?.index ?? 0) + 1}`;
+    return formatCompact(metricValue(actor, key));
   }
 
   function pricingLabel(actor) {
@@ -453,16 +456,10 @@
     }
     if (state.select) state.select.value = state.sortKey;
     if (state.directionButton) {
-      const isNewest = state.sortKey === "newest";
-      state.directionButton.textContent = isNewest
-        ? (state.direction === "desc" ? "Newest first" : "Oldest first")
-        : (state.direction === "desc" ? "High → low" : "Low → high");
-      state.directionButton.setAttribute(
-        "aria-label",
-        isNewest
-          ? (state.direction === "desc" ? "Newest first; switch to oldest first" : "Oldest first; switch to newest first")
-          : (state.direction === "desc" ? "Sorted high to low; switch to low to high" : "Sorted low to high; switch to high to low"),
-      );
+      const [first, last] = AAP_PROFILE_SORT.orderLabels(state.sortKey) || ["High → low", "Low → high"];
+      const [current, other] = state.direction === "desc" ? [first, last] : [last, first];
+      state.directionButton.textContent = current;
+      state.directionButton.setAttribute("aria-label", `${current.replace("→", "to")}; switch to ${other.replace("→", "to").toLowerCase()}`);
       state.directionButton.disabled = state.sortKey === "default";
     }
     if (state.retryButton) state.retryButton.hidden = !state.error;
@@ -707,7 +704,7 @@
   }
 
   async function fetchCatalog(route, catalogSortKey = "default", priority = "background", force = false, onProgress) {
-    const normalizedSortKey = catalogSortKey === "newest" ? "newest" : "default";
+    const normalizedSortKey = AAP_PROFILE_SORT.catalogOrder(catalogSortKey);
     const cacheKey = `${route.key}:${normalizedSortKey}`;
     const cacheScope = catalogCacheScope(route.key, normalizedSortKey);
     const cached = catalogCache.get(cacheKey);
@@ -742,7 +739,7 @@
           const response = await AAP_API.publicActorStore(route.username, {
             limit: PAGE_SIZE,
             offset,
-            sortBy: normalizedSortKey === "newest" ? "newest" : undefined,
+            sortBy: AAP_PROFILE_SORT.storeSortFor(normalizedSortKey),
             priority,
             cacheMode: "no-store",
           });
@@ -778,7 +775,7 @@
     state.loading = true;
     state.error = null;
     updateControls();
-    const catalogSortKey = state.sortKey === "newest" ? "newest" : "default";
+    const catalogSortKey = AAP_PROFILE_SORT.catalogOrder(state.sortKey);
     const operation = fetchCatalog(
       route,
       catalogSortKey,
@@ -796,7 +793,7 @@
       if (state.sortKey !== "default" || state.filter) renderSortedList();
     } catch (error) {
       if (requestId !== state.requestId || state.routeKey !== route.key) return;
-      state.error = error?.message || "Actor metrics could not be loaded.";
+      state.error = AAPF.errorText(error, "Actor metrics could not be loaded.");
       restoreOriginal();
     } finally {
       if (state.loadPromise === operation) state.loadPromise = null;
@@ -810,8 +807,11 @@
   function requestView(force = false) {
     const route = profileRoute();
     if (!route || (state.sortKey === "default" && !state.filter)) return;
-    const needsNewestCatalog = state.sortKey === "newest" && state.catalogSortKey !== "newest";
-    if (state.catalog && !force && !needsNewestCatalog) {
+    // Metric sorts work on any catalog; Store-ordered sorts and the default
+    // order (a filter alone) need the catalog in that order.
+    const wanted = AAP_PROFILE_SORT.catalogOrder(state.sortKey);
+    const needsCatalog = (wanted !== "default" || state.sortKey === "default") && state.catalogSortKey !== wanted;
+    if (state.catalog && !force && !needsCatalog) {
       renderSortedList();
       updateControls();
       return;

@@ -119,6 +119,19 @@ assert.deepEqual(Array.from(helpers.sortActors(actors, "newest", "asc"), (actor)
   "actor-a",
 ]);
 
+// "Recently updated" keeps the Store's lastUpdate order (the catalog index),
+// fetched as its own catalog.
+assert.deepEqual(Array.from(helpers.sortActors(actors, "updated"), (actor) => actor.name), ["actor-a", "actor-b", "actor-c", "actor-d"]);
+assert.deepEqual(Array.from(helpers.sortActors(actors, "updated", "asc"), (actor) => actor.name), ["actor-d", "actor-c", "actor-b", "actor-a"]);
+assert.equal(helpers.optionLabel("updated"), "Recently updated");
+assert.equal(helpers.catalogOrder("updated"), "updated");
+assert.equal(helpers.catalogOrder("newest"), "newest");
+assert.equal(helpers.catalogOrder("runs"), "default");
+assert.equal(helpers.storeSortFor("updated"), "lastUpdate");
+assert.equal(helpers.storeSortFor("default"), undefined);
+assert.deepEqual(Array.from(helpers.orderLabels("updated")), ["Latest update first", "Oldest update first"]);
+assert.equal(helpers.orderLabels("runs"), null);
+
 assert.deepEqual(Array.from(helpers.filterActors(actors, "mau", "gte", 2), (actor) => actor.name), ["actor-a"]);
 assert.deepEqual(Array.from(helpers.filterActors(actors, "runs", "gt", 12), (actor) => actor.name), ["actor-b"]);
 assert.deepEqual(Array.from(helpers.filterActors(actors, "monthlyRuns", "lte", 7), (actor) => actor.name), ["actor-a"]);

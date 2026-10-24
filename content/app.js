@@ -823,7 +823,7 @@
     const status = toolbar?.querySelector(".aap-status");
     if (status) {
       if (lastData.error) {
-        status.textContent = `Couldn't load Actor data (${lastData.error}).`;
+        status.textContent = AAPF.loadError("Actor data", lastData.error);
       } else if (lastData.partial) {
         status.textContent = `${lastData.partial.failedCount} Actor${lastData.partial.failedCount === 1 ? "" : "s"} unavailable; retrying…`;
       } else if (lastData.progress) {

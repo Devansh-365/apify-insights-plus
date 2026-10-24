@@ -667,7 +667,7 @@
     } catch (error) {
       if (requestId !== state.triage.requestId) return;
       if (!/cancelled/i.test(error?.message || "")) {
-        triage.error = `Couldn't load acquisition data${error?.message ? `: ${error.message}` : "."}`;
+        triage.error = AAPF.loadError("acquisition data", error);
       }
       persistTriage();
     } finally {
@@ -1323,7 +1323,7 @@
       await loadActors(actorsToLoad, month, previousMonth, portion, requestId, silent);
       if (requestId !== state.requestId) return;
     } catch (error) {
-      if (requestId === state.requestId && !silent) state.error = `Couldn't load acquisition data${error?.message ? `: ${error.message}` : "."}`;
+      if (requestId === state.requestId && !silent) state.error = AAPF.loadError("acquisition data", error);
     } finally {
       if (requestId === state.requestId) {
         state.loading = false;
