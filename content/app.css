@@ -19,6 +19,8 @@ body,
 .aap-profile-extra-metrics,
 .aap-profile-sort-controls,
 .aap-profile-sorted-list,
+.aap-visibility-toggle,
+.aap-visibility-panel,
 .aap-portfolio {
   --aap-bg: var(--color-neutral-background, #ffffff);
   --aap-bg-muted: var(--color-neutral-background-muted, #f4f4f5);
@@ -76,7 +78,8 @@ body,
   .aap-insights-nav-view-toggle,
   .aap-actor-detail-insights,
   .aap-profile-sort-controls,
-  .aap-profile-sorted-list
+  .aap-profile-sorted-list,
+  .aap-visibility-panel
 ) :where(button, select, input, a, summary, [tabindex]):focus-visible {
   outline: 2px solid var(--aap-focus);
   outline-offset: 1px;
@@ -5829,4 +5832,174 @@ th[aria-sort="descending"] .aap-portfolio-sort {
     transition: none !important;
     transform: none !important;
   }
+}
+
+/* ---- My Actors: "Not public" filter -------------------------------------- */
+.aap-visibility-toggle {
+  display: inline-flex;
+  align-items: center;
+  height: var(--aap-control-height);
+  margin-left: 8px;
+  padding: 0 12px;
+  border: 1px solid var(--aap-field-border);
+  border-radius: var(--aap-radius);
+  color: var(--aap-text);
+  background: var(--aap-field);
+  font: inherit;
+  font-size: var(--aap-font-md);
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 150ms ease, border-color 150ms ease;
+}
+
+.aap-visibility-toggle:hover {
+  background: var(--aap-hover);
+}
+
+.aap-visibility-toggle:focus-visible {
+  outline: 2px solid var(--aap-focus);
+  outline-offset: 2px;
+}
+
+.aap-visibility-toggle-active {
+  border-color: transparent;
+  color: var(--aap-accent-soft-text);
+  background: var(--aap-accent-soft);
+}
+
+.aap-visibility-toggle-active:hover {
+  background: var(--aap-accent-soft);
+}
+
+.aap-visibility-hidden {
+  display: none !important;
+}
+
+.aap-visibility-panel {
+  margin-bottom: 16px;
+  border: 1px solid var(--aap-border);
+  border-radius: var(--aap-radius-lg);
+  color: var(--aap-text);
+  background: var(--aap-card);
+}
+
+.aap-visibility-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--aap-separator);
+}
+
+.aap-visibility-heading {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--aap-font-md);
+  font-weight: 600;
+}
+
+.aap-visibility-action {
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--aap-border);
+  border-radius: var(--aap-radius);
+  color: var(--aap-text-muted);
+  background: transparent;
+  font: inherit;
+  font-size: var(--aap-font-sm);
+  cursor: pointer;
+}
+
+.aap-visibility-action:hover:not(:disabled) {
+  color: var(--aap-text);
+  background: var(--aap-hover);
+}
+
+.aap-visibility-action:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.aap-visibility-note {
+  margin: 0;
+  padding: 12px 16px;
+  color: var(--aap-text-subtle);
+  font-size: var(--aap-font-base);
+}
+
+.aap-visibility-error {
+  color: var(--aap-danger);
+}
+
+.aap-visibility-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 56px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--aap-separator);
+  color: inherit;
+  text-decoration: none;
+}
+
+.aap-visibility-row:last-child {
+  border-bottom: 0;
+}
+
+.aap-visibility-row:hover {
+  background: var(--aap-hover);
+}
+
+.aap-visibility-icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--aap-radius);
+  color: var(--aap-text-muted);
+  background: var(--aap-bg-muted);
+  font-weight: 600;
+  object-fit: cover;
+}
+
+.aap-visibility-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.aap-visibility-title,
+.aap-visibility-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aap-visibility-title {
+  font-size: var(--aap-font-md);
+  font-weight: 500;
+}
+
+.aap-visibility-name {
+  color: var(--aap-text-subtle);
+  font-size: var(--aap-font-sm);
+}
+
+.aap-visibility-chip {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: var(--aap-text-muted);
+  background: var(--aap-bg-muted);
+  font-size: var(--aap-font-xs);
+  white-space: nowrap;
+}
+
+.aap-visibility-chip-was {
+  color: var(--aap-warning-soft-text);
+  background: var(--aap-warning-soft);
 }

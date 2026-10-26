@@ -859,6 +859,69 @@
       );
   }
 
+  // Per-Actor monthly amounts behind the Runs and User statistics tooltips,
+  // from the same breakdown rows as the portfolio table, and the matching
+  // account-level amount of one day.
+  const CATALOG_AMOUNTS = {
+    runs: (row) => (Number(row?.failed) || 0) + (Number(row?.timedOut) || 0) + (Number(row?.aborted) || 0),
+    users: (row) => (Number(row?.payingUsers) || 0) + (Number(row?.freeUsers) || 0),
+  };
+
+  // Whether a month's breakdown rows account for the account-level chart:
+  // problem runs add up over the month, and a month's users per Actor are at
+  // least any single day's. Rows that fall short (a free Actor left out, a
+  // missing status) cannot pick the candidates.
+  function breakdownCovers(chartKey, month, rows) {
+    const amount = CATALOG_AMOUNTS[chartKey];
+    const listed = rows.reduce((sum, row) => sum + amount(row), 0);
+    const prefix = month.slice(0, 7);
+    const days = Object.entries(state.rawData?.daily || {}).filter(([day]) => day.startsWith(prefix)).map(([, row]) => amount(row));
+    const account = chartKey === "runs" ? days.reduce((sum, value) => sum + value, 0) : Math.max(0, ...days);
+    return listed >= account;
+  }
+
+  // Which Actors a pinned Runs or User statistics bucket loads: those with
+  // problem runs (or users) in the bucket's months, largest first. A bucket
+  // with none loads nothing. When a month's rows are missing (a failed month,
+  // or a range cached before the rows existed), every active Actor loads;
+  // when they fall short of the chart, every other active Actor follows.
+  function candidatesFor(chartKey, data, row) {
+    const amount = CATALOG_AMOUNTS[chartKey];
+    if (!amount) return { candidates: tooltipCandidates(data, row), scope: "all" };
+    const empty = chartKey === "runs"
+      ? !(Number(row.failed) + Number(row.timedOut) + Number(row.aborted) > 0)
+      : !(Number(row.payingUsers) + Number(row.freeUsers) > 0);
+    if (empty) return { candidates: [], scope: "none" };
+    const months = sourceMonths(row);
+    const rowsByMonth = data?.actorBreakdownRows || {};
+    if (!months.length || months.some((month) => !Array.isArray(rowsByMonth[month]))) {
+      return { candidates: tooltipCandidates(data, row), scope: "all" };
+    }
+    const totals = new Map();
+    for (const month of months) {
+      for (const actor of rowsByMonth[month]) {
+        const value = amount(actor);
+        if (!(value > 0)) continue;
+        const current = totals.get(actor.id) || { actorId: actor.id, name: actor.title || actor.name || actor.id, total: 0, activeMonths: [] };
+        current.total += value;
+        current.activeMonths.push(month);
+        totals.set(actor.id, current);
+      }
+    }
+    const candidates = [...totals.values()].sort((left, right) =>
+      right.total - left.total || String(left.name).localeCompare(String(right.name)));
+    if (months.every((month) => breakdownCovers(chartKey, month, rowsByMonth[month]))) {
+      return { candidates, scope: "filtered", months };
+    }
+    // The rows miss part of the chart: their Actors still load first, then
+    // every other active Actor.
+    const listed = new Set(candidates.map((candidate) => candidate.actorId));
+    return {
+      candidates: [...candidates, ...tooltipCandidates(data, row).filter((candidate) => !listed.has(candidate.actorId))],
+      scope: "all",
+    };
+  }
+
   function actorRevenueRanking(data) {
     return catalogActors(data)
       .filter((actor) => Number(actor.totalRevenueUsd) > 0)
@@ -1124,7 +1187,7 @@
         { label: `Peak ${unit}`, value: formatWhole(max?.value), detail: max ? `${shortPeriodLabel(max.period, grouping)}${spike ? ` · ${spike.toFixed(1)}× avg` : ""}` : "–", tone: spike && spike >= 2.5 ? "warning" : "neutral" },
       ];
       let takeaway = "Run volume and reliability look healthy.";
-      if (successRate != null && successRate < 0.95) takeaway = `${formatPercent(1 - successRate)} of runs did not succeed. Open Debugging to find the failing Actors.`;
+      if (successRate != null && successRate < 0.95) takeaway = `${formatPercent(1 - successRate)} of runs did not succeed. Click a ${unit} below to see which Actors failed.`;
       else if (spike && spike >= 2.5) takeaway = `Runs spiked to ${spike.toFixed(1)}× the average on ${shortPeriodLabel(max.period, grouping)}. Pin that ${unit} on the revenue chart to see which Actors drove it.`;
       else if (trend.tone === "bad") takeaway = "Run volume is declining.";
       return { tiles, takeaway, note: partialNote, average: avg, spike: spike && spike >= 2.5 ? max : null };
@@ -1492,6 +1555,36 @@
     { key: "runs", label: "Runs", format: (row) => formatCount(row.runs) },
     { key: "results", label: "Results", format: (row) => formatCount(row.results) },
   ];
+  const RUN_TOOLTIP_COLUMNS = [
+    { key: "name", label: "Actor" },
+    { key: "failed", label: "Failed", format: (row) => formatCount(row.failed) },
+    { key: "timedOut", label: "Timed out", format: (row) => formatCount(row.timedOut) },
+    { key: "aborted", label: "Aborted", format: (row) => formatCount(row.aborted) },
+    { key: "runs", label: "Runs", format: (row) => formatCount(row.runs) },
+  ];
+
+  const USER_TOOLTIP_COLUMNS = [
+    { key: "name", label: "Actor" },
+    { key: "payingUsers", label: "Paying", format: (row) => formatUsers(row.payingUsers) },
+    { key: "freeUsers", label: "Free", format: (row) => formatUsers(row.freeUsers) },
+    { key: "users", label: "Total", format: (row) => formatUsers(row.users) },
+  ];
+  // Charts whose bars can be pinned to list the Actors behind them.
+  const ACTOR_DETAIL_CHARTS = ["money", "runs", "users"];
+
+  // Week and month buckets show average users per day, so keep one decimal.
+  function formatUsers(value) {
+    if (value > 0 && value < 0.1) return "<0.1";
+    return Number(value || 0).toLocaleString("en-US", { maximumFractionDigits: 1 });
+  }
+
+  function chartKeyOf(canvas) {
+    return canvas?.__aapRange?.definition?.key || "";
+  }
+
+  function defaultTooltipSort(chartKey) {
+    return chartKey === "runs" ? "failed" : chartKey === "users" ? "users" : "revenue";
+  }
 
   function rangeChartTarget(event) {
     const canvas = event.currentTarget;
@@ -1509,9 +1602,10 @@
 
   function setRangeTooltipTarget(canvas, index) {
     const period = canvas.__aapRange?.data?.days?.[index] || null;
-    const sessionKey = `${dataKey() || ""}|${period || ""}`;
-    if (period !== rangeTooltipState.period) {
-      rangeTooltipState.sort = "revenue";
+    const chartKey = chartKeyOf(canvas);
+    const sessionKey = `${dataKey() || ""}|${chartKey}|${period || ""}`;
+    if (period !== rangeTooltipState.period || chartKey !== chartKeyOf(rangeTooltipState.canvas)) {
+      rangeTooltipState.sort = defaultTooltipSort(chartKey);
       rangeTooltipState.direction = "desc";
       rangeTooltipState.period = period;
     }
@@ -1535,12 +1629,12 @@
     });
   }
 
-  function tooltipSession(data, row, period) {
-    const key = `${dataKey() || ""}|${period || ""}`;
+  function tooltipSession(data, row, period, chartKey) {
+    const key = `${dataKey() || ""}|${chartKey}|${period || ""}`;
     if (!rangeTooltipState.session || rangeTooltipState.session.key !== key) {
       rangeTooltipState.session = {
         key,
-        candidates: tooltipCandidates(data, row),
+        ...candidatesFor(chartKey, data, row),
         details: new Map(),
         requestedIds: new Set(),
         failedTasks: [],
@@ -1564,8 +1658,11 @@
     const data = canvas?.__aapRange?.data;
     const period = data?.days?.[index];
     const row = period ? data.daily[period] || {} : null;
-    const session = period && row ? tooltipSession(data, row, period) : null;
+    const chartKey = chartKeyOf(canvas);
+    const session = period && row ? tooltipSession(data, row, period, chartKey) : null;
     if (!session || session.loading || !rangeTooltipState.pinned) return;
+    // Users come from their own endpoint, cached apart from revenue and runs.
+    const usersChart = chartKey === "users";
 
     let tasks;
     if (retry) {
@@ -1578,7 +1675,7 @@
       tasks = candidates.flatMap((candidate) => tooltipDetailMonths(candidate, row).map((month) => ({
         candidate,
         month,
-        key: `${month}|${candidate.actorId}`,
+        key: `${month}|${candidate.actorId}${usersChart ? "|users" : ""}`,
       })));
     }
     if (!tasks.length) {
@@ -1594,13 +1691,11 @@
     const results = await Promise.allSettled(tasks.map(async (task) => {
       const cached = actorDetailCache.get(task.key);
       if (cached?.entry) return { task, entry: cached.entry };
-      const detail = await AAP_API.actorDailyData(task.month, task.candidate.actorId, { priority: "foreground" });
-      const entry = {
-        actorId: task.candidate.actorId,
-        name: task.candidate.name || task.candidate.actorId,
-        margin: detail.margin,
-        runs: detail.runs,
-      };
+      const actor = { actorId: task.candidate.actorId, name: task.candidate.name || task.candidate.actorId };
+      const entry = usersChart
+        ? { ...actor, users: (await AAP_API.actorDailyUsers(task.month, actor.actorId, { priority: "foreground" })).users }
+        : await AAP_API.actorDailyData(task.month, actor.actorId, { priority: "foreground" })
+          .then((detail) => ({ ...actor, margin: detail.margin, runs: detail.runs }));
       actorDetailCache.set(task.key, { entry });
       return { task, entry };
     }));
@@ -1623,6 +1718,116 @@
     button.dataset.action = action;
     button.disabled = disabled;
     return button;
+  }
+
+  function monthsText(months) {
+    return (months || []).map((month) => AAPR.formatDate(month, { month: "short", year: "numeric" })).join(" and ");
+  }
+
+  // Wording for the Runs and User statistics tooltips.
+  const DETAIL_TEXT = {
+    runs: {
+      hint: "Click the bar to see which Actors had failed runs",
+      what: "failed, timed-out, or aborted runs",
+    },
+    users: {
+      hint: "Click the point to see each Actor's users",
+      what: "users",
+    },
+  };
+
+  // The pinned tooltip's per-Actor table: revenue on the revenue chart,
+  // Actors with failed, timed-out, or aborted runs on the Runs chart, and
+  // each Actor's users on the User statistics chart.
+  function appendActorDetails(data, row, period, chartKey, previousScroll = 0) {
+    const text = DETAIL_TEXT[chartKey];
+    if (state.partial) rangeTooltip.appendChild(createElement("div", "aap-range-tooltip-note", "Some account data could not be loaded; retrying."));
+    if (!rangeTooltipState.pinned) {
+      rangeTooltip.appendChild(createElement("div", "aap-range-tooltip-subtitle", text?.hint || `Click the bar to load up to ${tooltipActorCount} Actor details`));
+      return;
+    }
+
+    const usersChart = chartKey === "users";
+    const columns = chartKey === "runs" ? RUN_TOOLTIP_COLUMNS : usersChart ? USER_TOOLTIP_COLUMNS : ACTOR_TOOLTIP_COLUMNS;
+    const session = tooltipSession(data, row, period, chartKey);
+    const detailEntries = [...session.details.values()];
+    const days = row.sourceDays || [period];
+    const actors = usersChart
+      ? AAPR.actorUsersForDays(detailEntries, days)
+      : AAPR.actorRowsForDays(detailEntries, days).filter((actor) => chartKey !== "runs" || actor.problems > 0);
+    const revenueRankedActors = actorRevenueRanking(data);
+    const loadedCount = session.requestedIds.size;
+    const candidateCount = session.candidates.length;
+
+    if (session.failedTasks.length) {
+      rangeTooltip.appendChild(createElement("div", "aap-range-tooltip-note", `${session.failedTasks.length} Actor detail request${session.failedTasks.length === 1 ? "" : "s"} failed.`));
+    }
+    const perDay = usersChart && days.length > 1 ? " (average per day)" : "";
+    const hintText = session.loading
+      ? `Loading Actor details… showing ${actors.length} loaded`
+      : text
+        ? `${actors.length} Actor${actors.length === 1 ? "" : "s"} with ${text.what}${perDay} · ${loadedCount} of ${candidateCount} checked`
+        : `Showing ${actors.length} loaded Actors · ${loadedCount} of ${candidateCount} candidates`;
+    if (session.scope !== "none") rangeTooltip.appendChild(createElement("div", "aap-range-tooltip-subtitle", hintText));
+
+    if (actors.length) {
+      const table = document.createElement("table");
+      table.className = "aap-range-tooltip-table";
+      const head = document.createElement("thead");
+      const headRow = document.createElement("tr");
+      for (const column of columns) {
+        const cell = createElement("th", rangeTooltipState.sort === column.key ? "aap-range-tooltip-sorted" : "", column.label);
+        cell.dataset.sort = column.key;
+        if (rangeTooltipState.sort === column.key) {
+          cell.appendChild(document.createTextNode(rangeTooltipState.direction === "asc" ? " ▲" : " ▼"));
+        }
+        headRow.appendChild(cell);
+      }
+      head.appendChild(headRow);
+      table.appendChild(head);
+
+      const body = document.createElement("tbody");
+      for (const actor of sortedActorRows(actors, session.candidates)) {
+        const rowElement = document.createElement("tr");
+        const nameCell = document.createElement("td");
+        const dot = createElement("span", "aap-range-dot");
+        dot.style.backgroundColor = actorColor(actor.actorId, revenueRankedActors);
+        nameCell.append(dot, document.createTextNode(actor.name || actor.actorId));
+        rowElement.appendChild(nameCell);
+        for (const column of columns.slice(1)) {
+          rowElement.appendChild(createElement("td", "", column.format(actor)));
+        }
+        body.appendChild(rowElement);
+      }
+      table.appendChild(body);
+      // Only the Actor rows scroll; the pin bar, totals, and actions stay put.
+      const scroll = createElement("div", "aap-range-tooltip-scroll");
+      scroll.appendChild(table);
+      rangeTooltip.appendChild(scroll);
+      // Re-renders (e.g. "Load more Actors") keep the list's scroll position.
+      scroll.scrollTop = previousScroll;
+    } else if (!session.loading) {
+      const empty = !text
+        ? candidateCount ? "No loaded Actor had revenue or runs in this bucket." : "No active Actors were included in the monthly catalog."
+        : session.scope === "none" ? `No ${text.what} here.`
+          : candidateCount ? `No checked Actor had ${text.what} here.`
+            : session.scope === "filtered" ? `No Actor had ${text.what} in ${monthsText(session.months)}.`
+              : "No active Actors were included in the monthly catalog.";
+      rangeTooltip.appendChild(createElement("div", "aap-range-tooltip-note", empty));
+    }
+    const footer = createElement("div", "aap-range-tooltip-footer");
+    if (session.failedTasks.length) {
+      footer.appendChild(appendTooltipAction("Retry failed details", "retry", session.loading));
+    }
+    if (session.nextIndex < candidateCount) {
+      footer.appendChild(appendTooltipAction("Load more Actors", "more", session.loading));
+    } else if (!session.loading && !session.failedTasks.length && loadedCount) {
+      const done = text && session.scope === "filtered"
+        ? `Checked every Actor with ${text.what} in ${monthsText(session.months)}.`
+        : "All catalog Actors loaded for this bucket.";
+      footer.appendChild(createElement("div", "aap-range-tooltip-note", done));
+    }
+    if (footer.childElementCount) rangeTooltip.appendChild(footer);
   }
 
   function renderRangeTooltip(canvas, index) {
@@ -1667,77 +1872,7 @@
         summary.appendChild(item);
       }
       rangeTooltip.appendChild(summary);
-
-      const session = tooltipSession(data, row, period);
-      const detailEntries = [...session.details.values()];
-      const actors = AAPR.actorRowsForDays(detailEntries, row.sourceDays || [period]);
-      const revenueRankedActors = actorRevenueRanking(data);
-      const loadedCount = session.requestedIds.size;
-      const candidateCount = session.candidates.length;
-
-      if (state.partial) rangeTooltip.appendChild(createElement("div", "aap-range-tooltip-note", "Some account data could not be loaded; retrying."));
-      if (session.failedTasks.length) {
-        rangeTooltip.appendChild(createElement("div", "aap-range-tooltip-note", `${session.failedTasks.length} Actor detail request${session.failedTasks.length === 1 ? "" : "s"} failed.`));
-      }
-
-      const hintText = !rangeTooltipState.pinned
-        ? `Click the bar to load up to ${tooltipActorCount} Actor details`
-        : session.loading
-          ? `Loading Actor details… showing ${actors.length} loaded`
-          : `Showing ${actors.length} loaded Actors · ${loadedCount} of ${candidateCount} candidates`;
-      rangeTooltip.appendChild(createElement("div", "aap-range-tooltip-subtitle", hintText));
-
-      if (!rangeTooltipState.pinned) return true;
-
-      if (actors.length) {
-        const table = document.createElement("table");
-        table.className = "aap-range-tooltip-table";
-        const head = document.createElement("thead");
-        const headRow = document.createElement("tr");
-        for (const column of ACTOR_TOOLTIP_COLUMNS) {
-          const cell = createElement("th", rangeTooltipState.sort === column.key ? "aap-range-tooltip-sorted" : "", column.label);
-          cell.dataset.sort = column.key;
-          if (rangeTooltipState.sort === column.key) {
-            cell.appendChild(document.createTextNode(rangeTooltipState.direction === "asc" ? " ▲" : " ▼"));
-          }
-          headRow.appendChild(cell);
-        }
-        head.appendChild(headRow);
-        table.appendChild(head);
-
-        const body = document.createElement("tbody");
-        for (const actor of sortedActorRows(actors, session.candidates)) {
-          const rowElement = document.createElement("tr");
-          const nameCell = document.createElement("td");
-          const dot = createElement("span", "aap-range-dot");
-          dot.style.backgroundColor = actorColor(actor.actorId, revenueRankedActors);
-          nameCell.append(dot, document.createTextNode(actor.name || actor.actorId));
-          rowElement.appendChild(nameCell);
-          for (const column of ACTOR_TOOLTIP_COLUMNS.slice(1)) {
-            rowElement.appendChild(createElement("td", "", column.format(actor)));
-          }
-          body.appendChild(rowElement);
-        }
-        table.appendChild(body);
-        // Only the Actor rows scroll; the pin bar, totals, and actions stay put.
-        const scroll = createElement("div", "aap-range-tooltip-scroll");
-        scroll.appendChild(table);
-        rangeTooltip.appendChild(scroll);
-      } else if (!session.loading) {
-        rangeTooltip.appendChild(createElement("div", "aap-range-tooltip-note", candidateCount ? "No loaded Actor had revenue or runs in this bucket." : "No active Actors were included in the monthly catalog."));
-      }
-      const footer = createElement("div", "aap-range-tooltip-footer");
-      if (session.failedTasks.length) {
-        footer.appendChild(appendTooltipAction("Retry failed details", "retry", session.loading));
-      }
-      if (session.nextIndex < candidateCount) {
-        footer.appendChild(appendTooltipAction("Load more Actors", "more", session.loading));
-      } else if (!session.loading && !session.failedTasks.length && loadedCount) {
-        footer.appendChild(createElement("div", "aap-range-tooltip-note", "All catalog Actors loaded for this bucket."));
-      }
-      if (footer.childElementCount) rangeTooltip.appendChild(footer);
-      const scroll = rangeTooltip.querySelector(".aap-range-tooltip-scroll");
-      if (scroll) scroll.scrollTop = previousScroll;
+      appendActorDetails(data, row, period, definition.key, previousScroll);
       return true;
     }
 
@@ -1766,6 +1901,7 @@
       );
       rangeTooltip.appendChild(line);
     }
+    if (ACTOR_DETAIL_CHARTS.includes(definition.key)) appendActorDetails(data, row, period, definition.key, previousScroll);
     return true;
   }
 
@@ -1800,7 +1936,7 @@
 
   function onRangeChartClick(event) {
     const target = rangeChartTarget(event);
-    if (!target || target.canvas.__aapRange?.definition?.key !== "money") return;
+    if (!target || !ACTOR_DETAIL_CHARTS.includes(chartKeyOf(target.canvas))) return;
     if (rangeTooltipState.pinned && rangeTooltipState.canvas === target.canvas && rangeTooltipState.index === target.index) {
       return hideRangeTooltip();
     }

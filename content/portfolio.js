@@ -96,7 +96,6 @@
   function sortValue(row, key) {
     if (key === "name") return row.title.toLowerCase();
     if (key === "users") return row.payingUsers * 1e6 + row.freeUsers;
-    if (key === "runs") return row.failureRate ?? -Infinity;
     return row[key] ?? -Infinity;
   }
 

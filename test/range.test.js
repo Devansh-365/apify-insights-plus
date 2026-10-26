@@ -49,7 +49,7 @@ const data = range.aggregate(
         actorId: "actor-a",
         name: "Actor A",
         margin: { dailyProfitMarginStats: { "2026-01-31": { payingUsersUsd: { revenueUsd: 6, costUsd: 1, profitUsd: 5, margin: 5 / 6 } } } },
-        runs: { dailyStats: { "2026-01-31": { TOTAL: 2, RESULTS: 3 } } },
+        runs: { dailyStats: { "2026-01-31": { TOTAL: 2, RESULTS: 3, FAILED: 1 } } },
       }, {
         actorId: "actor-b",
         name: "Actor B",
@@ -125,19 +125,43 @@ const crossMonthActor = range.actorRowsForDays([
     actorId: "actor-a",
     name: "Actor A",
     margin: { dailyProfitMarginStats: { "2026-01-31": { payingUsersUsd: { revenueUsd: 2, costUsd: 1, profitUsd: 1 } } } },
-    runs: { dailyStats: { "2026-01-31": { TOTAL: 2, RESULTS: 3 } } },
+    runs: { dailyStats: { "2026-01-31": { TOTAL: 2, RESULTS: 3, FAILED: 1 } } },
   },
   {
     actorId: "actor-a",
     name: "Actor A",
     margin: { dailyProfitMarginStats: { "2026-02-01": { payingUsersUsd: { revenueUsd: 3, costUsd: 1, profitUsd: 2 } } } },
-    runs: { dailyStats: { "2026-02-01": { TOTAL: 4, RESULTS: 5 } } },
+    runs: { dailyStats: { "2026-02-01": { TOTAL: 4, RESULTS: 5, FAILED: 1, "TIMED-OUT": 1, ABORTED: 1 } } },
   },
 ], ["2026-01-31", "2026-02-01"]);
 assert.equal(crossMonthActor.length, 1);
 assert.equal(crossMonthActor[0].revenue, 5);
 assert.equal(crossMonthActor[0].runs, 6);
 assert.equal(crossMonthActor[0].results, 8);
+// Each status is counted per Actor for the Runs tooltip.
+assert.equal(crossMonthActor[0].failed, 2);
+assert.equal(crossMonthActor[0].timedOut, 1);
+assert.equal(crossMonthActor[0].aborted, 1);
+assert.equal(crossMonthActor[0].problems, 4);
+assert.equal(range.actorRowsForDays([{ actorId: "x", runs: { dailyStats: { "2026-01-31": { TOTAL: 3, TIMED_OUT: 2 } } } }], ["2026-01-31"])[0].timedOut, 2, "either timed-out spelling");
+// A missing FAILED count is worked out from the total, as the bars do.
+const derived = range.actorRowsForDays([{ actorId: "x", runs: { dailyStats: { "2026-01-31": { TOTAL: 10, SUCCEEDED: 6, ABORTED: 1 } } } }], ["2026-01-31"])[0];
+assert.equal(derived.failed, 3);
+assert.equal(derived.problems, 4);
+
+// Users per Actor: that day's counts, or the average per day over a bucket.
+const users = range.actorUsersForDays([
+  { actorId: "a", name: "A", users: { "2026-01-31": { payingUsers: 2, freeUsers: 5 }, "2026-02-01": { payingUsers: 4, freeUsers: 0 } } },
+  { actorId: "b", name: "B", users: { "2026-01-31": { payingUsers: 0, freeUsers: 0 } } },
+  // The same Actor's next month merges into one row.
+  { actorId: "a", name: "A", users: { "2026-02-02": { payingUsers: 3, freeUsers: 1 } } },
+], ["2026-01-31", "2026-02-01", "2026-02-02"]);
+assert.equal(users.length, 1, "Actors without users are left out");
+assert.equal(users[0].payingUsers, 3);
+assert.equal(users[0].freeUsers, 2);
+assert.equal(users[0].users, 5);
+const oneDay = range.actorUsersForDays([{ actorId: "a", users: { "2026-01-31": { payingUsers: 2, freeUsers: 5 } } }], ["2026-01-31"]);
+assert.equal(oneDay[0].users, 7);
 
 const daily = range.group(data, "day");
 assert.deepEqual(Array.from(daily.days), ["2026-01-31", "2026-02-01", "2026-02-02"]);

@@ -45,6 +45,7 @@
         "lib/range.js",
         "lib/actor-detail.js",
         "lib/profile-sort.js",
+        "lib/visibility.js",
         "lib/benchmark.js",
         "lib/portfolio.js",
         "lib/quality-inbox.js",
@@ -64,6 +65,7 @@
         "content/debugging.js",
         "content/actor-detail.js",
         "content/profile-sort.js",
+        "content/visibility.js",
         "content/benchmark.js"
       ],
       "css": [
