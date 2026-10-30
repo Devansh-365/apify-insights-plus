@@ -1,45 +1,73 @@
 * { box-sizing: border-box; }
 
-/* Mirrors Apify Console's neutral palette so the popup feels like part of
-   the same product. Follows the system light/dark setting. */
+/* The same token layer as the in-page widgets (content/app.css): each token
+   holds the value of the Apify Console variable it maps to there, so the
+   popup reads as the same product. Light values are Apify's body defaults,
+   dark values its body.theme-dark; the popup follows the system setting. */
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 400 600;
+  font-display: swap;
+  src: url("fonts/inter-latin.woff2") format("woff2");
+}
+
 :root {
   color-scheme: light dark;
-  --motion-fast: 140ms;
-  --motion-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
-  --bg: #ffffff;
-  --bg-muted: #f4f4f5;
-  --card: #ffffff;
-  --hover: #ececee;
-  --border: #d4d5d8;
-  --separator: #e4e5e7;
-  --text: #1b1c1d;
-  --text-muted: #42464c;
-  --text-subtle: #5c6168;
-  --field: #ffffff;
-  --accent: #1c5cff;
-  --accent-text: #1c5cff;
-  --accent-soft: #e6eeff;
-  --accent-soft-text: #1747c2;
-  --focus: #1c5cff;
+  --aap-bg: #ffffff;
+  --aap-bg-muted: #f9f9fa;
+  --aap-bg-subtle: #f4f4f5;
+  --aap-card: #ffffff;
+  --aap-hover: #edeeef;
+  --aap-field: #f9f9fa;
+  --aap-field-border: #c9cbcf;
+  --aap-border: #d2d3d6;
+  --aap-separator: #e4e5e6;
+  --aap-text: #1f2123;
+  --aap-text-muted: #3d3f43;
+  --aap-text-subtle: #6d7178;
+  --aap-text-disabled: #c9cbcf;
+  --aap-accent: #246dff;
+  --aap-accent-text: #246dff;
+  --aap-accent-soft: #e0ebff;
+  --aap-accent-soft-text: #0043ca;
+  --aap-on-accent: #ffffff;
+  --aap-action-secondary: #d2d3d6;
+  --aap-focus: #246dff;
+  --aap-radius-sm: 4px;
+  --aap-radius: 6px;
+  --aap-radius-lg: 8px;
+  --aap-control-height: 32px;
+  --aap-font-xs: 11px;
+  --aap-font-sm: 12px;
+  --aap-font-base: 13px;
+  --aap-font-md: 14px;
+  --aap-motion-fast: 140ms;
+  --aap-motion-ease: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #161718;
-    --bg-muted: #1f2123;
-    --card: #1b1c1d;
-    --hover: #292b2e;
-    --border: #3d3f43;
-    --separator: #333538;
-    --text: #f4f4f5;
-    --text-muted: #bfc1c5;
-    --text-subtle: #9ea2a8;
-    --field: #0a0a0b;
-    --accent: #528fff;
-    --accent-text: #6b9fff;
-    --accent-soft: #152447;
-    --accent-soft-text: #97bcff;
-    --focus: #246dff;
+    --aap-bg: #161718;
+    --aap-bg-muted: #1f2123;
+    --aap-bg-subtle: #242528;
+    --aap-card: #1b1c1d;
+    --aap-hover: #292b2e;
+    --aap-field: #0a0a0b;
+    --aap-field-border: #333538;
+    --aap-border: #3d3f43;
+    --aap-separator: #333538;
+    --aap-text: #f4f4f5;
+    --aap-text-muted: #bfc1c5;
+    --aap-text-subtle: #9ea2a8;
+    --aap-text-disabled: #4f5257;
+    --aap-accent: #528fff;
+    --aap-accent-text: #6b9fff;
+    --aap-accent-soft: #152447;
+    --aap-accent-soft-text: #97bcff;
+    --aap-on-accent: #161718;
+    --aap-action-secondary: #4f5257;
+    --aap-focus: #246dff;
   }
 }
 
@@ -47,24 +75,28 @@ body {
   width: 340px;
   margin: 0;
   overflow-x: hidden;
-  font-family: -apple-system, system-ui, "Segoe UI", Helvetica, Arial, sans-serif;
-  font-size: 13px;
+  font-family: "Inter", -apple-system, system-ui, "Segoe UI", Helvetica, Arial, sans-serif;
+  font-size: var(--aap-font-base);
   line-height: 20px;
-  background: var(--bg);
-  color: var(--text);
+  color: var(--aap-text);
+  background: var(--aap-bg);
 }
 
 :focus-visible {
-  outline: 2px solid var(--focus);
+  outline: 2px solid var(--aap-focus);
   outline-offset: 1px;
 }
 
 .hd {
+  position: sticky;
+  top: 0;
+  z-index: 1;
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 14px 16px;
-  border-bottom: 1px solid var(--separator);
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--aap-separator);
+  background: var(--aap-bg);
 }
 
 .hd .logo {
@@ -73,13 +105,13 @@ body {
   height: 28px;
   flex: 0 0 28px;
   place-items: center;
-  border-radius: 6px;
-  color: var(--accent-soft-text);
-  background: var(--accent-soft);
+  border-radius: var(--aap-radius);
+  color: var(--aap-accent-soft-text);
+  background: var(--aap-accent-soft);
 }
 
 .hd .name {
-  font-size: 14px;
+  font-size: var(--aap-font-md);
   font-weight: 600;
 }
 
@@ -92,16 +124,16 @@ body {
   margin-left: auto;
   padding: 0;
   border: 0;
-  border-radius: 6px;
-  color: var(--text-subtle);
+  border-radius: var(--aap-radius);
+  color: var(--aap-text-subtle);
   background: transparent;
   cursor: pointer;
-  transition: color var(--motion-fast) var(--motion-ease), background-color var(--motion-fast) var(--motion-ease);
+  transition: color var(--aap-motion-fast) var(--aap-motion-ease), background-color var(--aap-motion-fast) var(--aap-motion-ease);
 }
 
 .icon-button:hover {
-  color: var(--text);
-  background: var(--hover);
+  color: var(--aap-text);
+  background: var(--aap-hover);
 }
 
 .back-button {
@@ -111,123 +143,297 @@ body {
   margin: 12px 16px 0;
   padding: 4px 8px 4px 4px;
   border: 0;
-  border-radius: 6px;
-  color: var(--text-subtle);
+  border-radius: var(--aap-radius);
+  color: var(--aap-text-subtle);
   background: transparent;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--aap-font-sm);
   cursor: pointer;
-  transition: color var(--motion-fast) var(--motion-ease), background-color var(--motion-fast) var(--motion-ease);
+  transition: color var(--aap-motion-fast) var(--aap-motion-ease), background-color var(--aap-motion-fast) var(--aap-motion-ease);
 }
 
 .back-button:hover {
-  color: var(--text);
-  background: var(--hover);
+  color: var(--aap-text);
+  background: var(--aap-hover);
 }
 
-.card {
-  margin: 12px 16px;
-  padding: 14px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--card);
+/* A panel is the in-page widget card: heading row on top, list rows below
+   (the Not public panel on My Actors uses the same layout). */
+.panel {
+  margin: 12px 16px 0;
+  overflow: hidden;
+  border: 1px solid var(--aap-border);
+  border-radius: var(--aap-radius-lg);
+  color: var(--aap-text);
+  background: var(--aap-card);
 }
 
-.card-title {
-  margin-bottom: 6px;
-  color: var(--text);
-  font-size: 13px;
-  font-weight: 600;
+.panel-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 8px 12px 8px 16px;
+  border-bottom: 1px solid var(--aap-separator);
 }
 
-.blurb {
+.panel-heading {
+  flex: 1;
+  min-width: 0;
   margin: 0;
-  color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--aap-font-md);
+  font-weight: 600;
+  line-height: 20px;
+}
+
+.panel-body {
+  padding: 12px 16px 14px;
+}
+
+.chip {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: var(--aap-text-muted);
+  background: var(--aap-bg-muted);
+  font-size: var(--aap-font-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.note {
+  margin: 8px 18px 0;
+  color: var(--aap-text-subtle);
+  font-size: var(--aap-font-sm);
   line-height: 18px;
 }
 
-.blurb strong {
-  color: var(--text);
+.note strong {
+  color: var(--aap-text-muted);
   font-weight: 600;
 }
 
-.muted {
-  color: var(--text-subtle);
-  font-size: 12px;
-}
-
-.cache-row {
+.toggle-row {
   display: flex;
-  justify-content: space-between;
+  align-items: center;
   gap: 12px;
-  padding: 6px 0;
-  border-bottom: 1px solid var(--separator);
-  color: var(--text);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
+  min-height: 56px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--aap-separator);
+  cursor: pointer;
+  transition: background-color var(--aap-motion-fast) var(--aap-motion-ease);
 }
 
-.cache-row:last-of-type {
+.toggle-row:last-child {
   border-bottom: 0;
 }
 
-.cache-row span:last-child {
-  color: var(--text-subtle);
-  text-align: right;
+.toggle-row:hover {
+  background: var(--aap-hover);
 }
 
-.row { margin-top: 12px; }
+.toggle-row.is-blocked {
+  cursor: default;
+}
 
-.row button {
-  width: 100%;
-  height: 32px;
-  padding: 0 12px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--text);
-  background: var(--bg);
-  font: inherit;
-  font-size: 13px;
+.toggle-row.is-blocked:hover {
+  background: transparent;
+}
+
+.toggle-row.is-blocked .row-title {
+  color: var(--aap-text-subtle);
+}
+
+/* The cached-data panel is a single row with its action on the right. */
+.panel-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 56px;
+  padding: 8px 12px 8px 16px;
+}
+
+.panel-row .row-title {
+  margin: 0;
+  line-height: 20px;
+}
+
+/* An on feature's icon takes the header logo's tint; off, it goes gray, so
+   the state never rests on the switch color alone. */
+.row-icon {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  place-items: center;
+  border-radius: var(--aap-radius);
+  color: var(--aap-text-subtle);
+  background: var(--aap-bg-muted);
+  transition: color var(--aap-motion-fast) var(--aap-motion-ease), background-color var(--aap-motion-fast) var(--aap-motion-ease);
+}
+
+.is-on .row-icon {
+  color: var(--aap-accent-soft-text);
+  background: var(--aap-accent-soft);
+}
+
+.is-blocked .row-icon {
+  opacity: 0.6;
+}
+
+.is-entering .toggle-row {
+  animation: row-in 220ms var(--aap-motion-ease) both;
+  animation-delay: calc(var(--i, 0) * 18ms);
+}
+
+@keyframes row-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.row-text {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+.row-title {
+  font-size: var(--aap-font-md);
   font-weight: 500;
+}
+
+.row-sub {
+  color: var(--aap-text-subtle);
+  font-size: var(--aap-font-sm);
+  line-height: 18px;
+}
+
+/* On is Apify's primary action color; off is its secondary action gray. */
+.switch {
+  position: relative;
+  width: 32px;
+  height: 18px;
+  flex: 0 0 32px;
+  margin: 0;
+  border-radius: 999px;
+  background: var(--aap-action-secondary);
+  appearance: none;
   cursor: pointer;
-  transition: background-color var(--motion-fast) var(--motion-ease), transform 90ms var(--motion-ease);
+  transition: background-color var(--aap-motion-fast) var(--aap-motion-ease);
 }
 
-.row button:hover {
-  background: var(--hover);
+.switch::before {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--aap-card);
+  content: "";
+  transition: transform var(--aap-motion-fast) var(--aap-motion-ease);
 }
 
-.row button:active {
-  transform: scale(0.98);
+.switch:checked {
+  background: var(--aap-accent);
+}
+
+.switch:checked::before {
+  background: var(--aap-on-accent);
+  transform: translateX(14px);
+}
+
+.switch:active:not(:disabled)::before {
+  transform: scaleX(1.25);
+  transform-origin: left center;
+}
+
+.switch:checked:active:not(:disabled)::before {
+  transform: translateX(14px) scaleX(1.25);
+  transform-origin: right center;
+}
+
+.switch:focus-visible {
+  outline: 2px solid var(--aap-focus);
+  outline-offset: 2px;
+}
+
+.switch:disabled {
+  background: var(--aap-bg-subtle);
+  cursor: default;
+}
+
+.switch:disabled::before {
+  background: var(--aap-text-disabled);
+}
+
+/* The widgets' secondary action button (Refresh / Show all Actors). */
+.action {
+  flex: none;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--aap-border);
+  border-radius: var(--aap-radius);
+  color: var(--aap-text-muted);
+  background: transparent;
+  font: inherit;
+  font-size: var(--aap-font-sm);
+  cursor: pointer;
+  transition: background-color var(--aap-motion-fast) var(--aap-motion-ease);
+}
+
+.action:hover:not(:disabled) {
+  color: var(--aap-text);
+  background: var(--aap-hover);
+}
+
+.action:disabled {
+  cursor: default;
+  opacity: 0.6;
 }
 
 .field {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  color: var(--text-muted);
-  font-size: 12px;
+  color: var(--aap-text-muted);
+  font-size: var(--aap-font-sm);
   font-weight: 500;
 }
 
 .field input[type="number"] {
   width: 88px;
-  height: 32px;
+  height: var(--aap-control-height);
   padding: 0 10px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--text);
-  background: var(--field);
+  border: 1px solid var(--aap-field-border);
+  border-radius: var(--aap-radius);
+  color: var(--aap-text);
+  background: var(--aap-field);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--aap-font-base);
   font-variant-numeric: tabular-nums;
+}
+
+.field input[type="number"]:focus-visible {
+  border-color: var(--aap-focus);
 }
 
 .field-hint {
   margin-top: 8px;
-  color: var(--text-subtle);
-  font-size: 11px;
+  color: var(--aap-text-subtle);
+  font-size: var(--aap-font-xs);
   line-height: 16px;
 }
 
@@ -235,10 +441,10 @@ body {
   margin-left: 4px;
   padding: 0;
   border: 0;
-  color: var(--accent-text);
+  color: var(--aap-accent-text);
   background: transparent;
   font: inherit;
-  font-size: 11px;
+  font-size: var(--aap-font-xs);
   cursor: pointer;
 }
 
@@ -249,13 +455,14 @@ body {
 .ft {
   display: flex;
   justify-content: center;
+  margin-top: 14px;
   padding: 10px 16px 14px;
-  border-top: 1px solid var(--separator);
+  border-top: 1px solid var(--aap-separator);
 }
 
 #open-insights {
-  color: var(--accent-text);
-  font-size: 12px;
+  color: var(--aap-accent-text);
+  font-size: var(--aap-font-sm);
   font-weight: 500;
   text-decoration: none;
 }
@@ -277,8 +484,8 @@ body {
   justify-content: space-between;
   gap: 12px;
   padding: 4px 0;
-  border-bottom: 1px solid var(--separator);
-  font-size: 12px;
+  border-bottom: 1px solid var(--aap-separator);
+  font-size: var(--aap-font-sm);
   font-variant-numeric: tabular-nums;
 }
 
@@ -287,23 +494,35 @@ body {
 }
 
 .perf-row dt {
-  color: var(--text-muted);
+  color: var(--aap-text-muted);
 }
 
 .perf-row dd {
   margin: 0;
-  color: var(--text);
+  color: var(--aap-text);
   text-align: right;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .icon-button,
   .back-button,
-  .row button {
+  .toggle-row,
+  .switch,
+  .switch::before,
+  .action,
+  .row-icon {
     transition: none;
   }
 
-  .row button:active {
+  .is-entering .toggle-row {
+    animation: none;
+  }
+
+  .switch:active:not(:disabled)::before {
     transform: none;
+  }
+
+  .switch:checked:active:not(:disabled)::before {
+    transform: translateX(14px);
   }
 }

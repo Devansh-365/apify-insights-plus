@@ -22,22 +22,23 @@
     </header>
 
     <div id="view-main">
-      <section class="card">
-        <div class="card-title">Quick start</div>
-        <p class="blurb">
-          Choose <strong>Original / Plus</strong> in Insights. Plus adds ranged
-          charts and account-wide Actor views for Monetization, Acquisition,
-          Quality, and Debugging.
-        </p>
-      </section>
+      <div id="features"></div>
+      <p class="note">
+        Changes apply to open Apify tabs right away. Insights pages keep their
+        own <strong>Original / Plus</strong> switch.
+      </p>
 
-      <section class="card">
-        <div class="card-title">Cached analytics data</div>
-        <div id="cache-body" class="muted">Loading…</div>
-        <div class="row">
-          <button id="clear-cache">Clear cache</button>
+      <section class="panel" aria-labelledby="cache-heading">
+        <div class="panel-row">
+          <span id="cache-icon"></span>
+          <span class="row-text">
+            <h2 id="cache-heading" class="row-title">Cached analytics data</h2>
+            <span id="cache-body" class="row-sub">Loading…</span>
+          </span>
+          <button id="clear-cache" class="action" type="button">Clear</button>
         </div>
       </section>
+      <p id="status" class="sr-only" aria-live="polite"></p>
 
       <footer class="ft">
         <a id="open-insights" href="https://console.apify.com/actors/insights/monetization" target="_blank" rel="noopener">
@@ -54,27 +55,36 @@
         Back
       </button>
 
-      <section class="card">
-        <div class="card-title">Settings</div>
-        <label class="field">
-          <span>Actors shown in monetization tooltip</span>
-          <input id="tooltip-actor-count" type="number" min="1" max="100" />
-        </label>
-        <div class="field-hint">
-          Default is <span id="tooltip-actor-count-default"></span>. Actors with revenue or at least one run are eligible.
-          <button id="tooltip-actor-count-reset" class="link-button" type="button">Reset to default</button>
+      <section class="panel" aria-labelledby="settings-heading">
+        <div class="panel-head">
+          <h2 id="settings-heading" class="panel-heading">Settings</h2>
+        </div>
+        <div class="panel-body">
+          <label class="field">
+            <span>Actors shown in monetization tooltip</span>
+            <input id="tooltip-actor-count" type="number" min="1" max="100" />
+          </label>
+          <div class="field-hint">
+            Default is <span id="tooltip-actor-count-default"></span>. Actors with revenue or at least one run are eligible.
+            <button id="tooltip-actor-count-reset" class="link-button" type="button">Reset to default</button>
+          </div>
         </div>
       </section>
 
-      <section class="card">
-        <div class="card-title">Performance</div>
-        <p class="field-hint perf-hint">Live data-loading numbers from the most recent Apify tab.</p>
-        <dl id="perf-body" class="perf-list">
-          <div class="perf-row"><dt>Waiting for an Apify tab…</dt><dd></dd></div>
-        </dl>
+      <section class="panel" aria-labelledby="perf-heading">
+        <div class="panel-head">
+          <h2 id="perf-heading" class="panel-heading">Performance</h2>
+        </div>
+        <div class="panel-body">
+          <p class="field-hint perf-hint">Live data-loading numbers from the most recent Apify tab.</p>
+          <dl id="perf-body" class="perf-list">
+            <div class="perf-row"><dt>Waiting for an Apify tab…</dt><dd></dd></div>
+          </dl>
+        </div>
       </section>
     </div>
 
+    <script src="../lib/features.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>

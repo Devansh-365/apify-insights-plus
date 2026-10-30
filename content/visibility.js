@@ -309,11 +309,12 @@
   });
 
   function sync() {
-    if (MODEL.developmentRoute(location.pathname)) mount();
+    if (MODEL.developmentRoute(location.pathname) && (self.AAP_FEATURES?.enabled("visibility") ?? true)) mount();
     else unmount();
   }
 
   sync();
+  self.AAP_FEATURES?.onChange(sync);
   const poll = setInterval(sync, 500);
   window.addEventListener("beforeunload", () => clearInterval(poll));
 })();

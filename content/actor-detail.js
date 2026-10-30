@@ -50,7 +50,7 @@
   }
 
   function actorRoute() {
-    if (!AAP_CONTEXT.isPublicSite()) return null;
+    if (!AAP_CONTEXT.isPublicSite() || !(self.AAP_FEATURES?.enabled("actorActivity") ?? true)) return null;
     const parts = location.pathname.split("/").filter(Boolean);
     if (parts.length !== 2 || ROUTE_EXCLUSIONS.has(parts[0].toLowerCase())) return null;
     let username;
@@ -430,6 +430,7 @@
   }
 
   sync();
+  self.AAP_FEATURES?.onChange(sync);
   const poll = setInterval(() => {
     if (location.pathname !== lastPath) {
       lastPath = location.pathname;

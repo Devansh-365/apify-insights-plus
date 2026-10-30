@@ -61,6 +61,7 @@
   }
 
   function profileRoute() {
+    if (!(self.AAP_FEATURES?.enabled("profileSort") ?? true)) return null;
     return AAP_CONTEXT.isPublicSite() ? AAP_PROFILE_SORT.profileRoute(location.pathname) : null;
   }
 
@@ -915,6 +916,7 @@
   }
 
   sync();
+  self.AAP_FEATURES?.onChange(sync);
   const poll = setInterval(() => {
     if (location.pathname !== lastPath) {
       lastPath = location.pathname;

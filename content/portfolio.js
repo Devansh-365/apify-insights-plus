@@ -463,6 +463,11 @@
   }
 
   function render(data, context = {}, force = false) {
+    // Switched off in the popup: the Console's own table stays.
+    if (!(self.AAP_FEATURES?.enabled("portfolio") ?? true)) {
+      if (host) remove();
+      return;
+    }
     if (!MODEL || !ensureHost()) return;
     const rowsByMonth = data?.actorBreakdownRows || null;
     const previousRows = rowsByMonth ? previousRowsFor(data, rowsByMonth) : null;

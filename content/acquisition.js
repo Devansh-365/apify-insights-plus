@@ -175,10 +175,13 @@
   })();
 
   function onOverviewRoute() {
-    return ROUTE_RE.test(location.pathname) && !new URLSearchParams(location.search).has("actorId");
+    return ROUTE_RE.test(location.pathname) && !new URLSearchParams(location.search).has("actorId") && (self.AAP_FEATURES?.enabled("acquisition") ?? true);
   }
 
-  if (onOverviewRoute()) document.documentElement.classList.add(OVERVIEW_CLASS);
+  // Hides the native page as soon as the feature switches are read.
+  self.AAP_FEATURES?.onChange(() => {
+    if (onOverviewRoute()) document.documentElement.classList.add(OVERVIEW_CLASS);
+  });
 
   function createElement(tag, className, text) {
     const element = document.createElement(tag);
@@ -978,12 +981,16 @@
       renderTimer = null;
     }
     if (!refs) return;
+    // With the Today list switched off, its tab goes and Triage opens instead.
+    const todayOn = self.AAP_FEATURES?.enabled("today") ?? true;
+    if (!todayOn && state.view === "today") state.view = VIEWS.detail;
     const now = Date.now();
     const triageView = state.view === "triage";
     const todayView = state.view === "today";
     const tableView = state.view === "table";
     refs.tabs.forEach((tab) => {
       const active = tab.dataset.view === state.view;
+      tab.hidden = tab.dataset.view === "today" && !todayOn;
       tab.setAttribute("aria-pressed", String(active));
       tab.classList.toggle("aap-insights-nav-view-button-active", active);
     });
@@ -1333,6 +1340,8 @@
     }
   }
 
+  // The Today switch applies to an open page; the poll handles the rest.
+  self.AAP_FEATURES?.onChange(() => render());
   const poll = setInterval(() => {
     if (onOverviewRoute()) ensureHost();
     else removeHost();

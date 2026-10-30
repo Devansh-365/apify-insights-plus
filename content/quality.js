@@ -106,7 +106,7 @@
   });
 
   function onOverviewRoute() {
-    return ROUTE_RE.test(location.pathname) && !new URLSearchParams(location.search).has("actorId");
+    return ROUTE_RE.test(location.pathname) && !new URLSearchParams(location.search).has("actorId") && (self.AAP_FEATURES?.enabled("quality") ?? true);
   }
 
   function viewScope() {
@@ -815,8 +815,12 @@
       refs.status.appendChild(retry);
     }
     refs.refresh.disabled = state.scan.running && !state.scan.background;
+    // With the Today list switched off, its tab goes and the Inbox opens instead.
+    const todayOn = self.AAP_FEATURES?.enabled("today") ?? true;
+    if (!todayOn && state.view === "today") state.view = VIEWS.detail;
     refs.tabs.forEach((tab) => {
       const active = tab.dataset.view === state.view;
+      tab.hidden = tab.dataset.view === "today" && !todayOn;
       tab.setAttribute("aria-pressed", String(active));
       tab.classList.toggle("aap-insights-nav-view-button-active", active);
     });
@@ -1098,6 +1102,8 @@
     refs = null;
   }
 
+  // The Today switch applies to an open page; the poll handles the rest.
+  self.AAP_FEATURES?.onChange(() => render());
   const poll = setInterval(() => {
     if (onOverviewRoute()) ensureHost();
     else removeHost();

@@ -40,6 +40,7 @@
       "js": [
         "lib/perf.js",
         "lib/context.js",
+        "lib/features.js",
         "lib/local-store.js",
         "lib/format.js",
         "lib/range.js",

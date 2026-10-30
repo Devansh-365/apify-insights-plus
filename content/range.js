@@ -161,11 +161,14 @@
     y: 0,
     session: null,
   };
-  let lastPath = location.pathname;
+  // Whether the Plus view owned the page at the last poll; leaving the page or
+  // switching the feature off in the popup restores the native view.
+  let lastActive = false;
   let pageThemeSignature = "";
   let rangeInitialized = false;
 
-  const onInsightsRoute = () => ROUTE_RE.test(location.pathname);
+  // Switched off in the popup, the page is left fully native.
+  const onInsightsRoute = () => ROUTE_RE.test(location.pathname) && (self.AAP_FEATURES?.enabled("monetization") ?? true);
 
   function currentMonth() {
     return new Date().toISOString().slice(0, 7);
@@ -2200,9 +2203,10 @@
 
   const poll = setInterval(() => {
     const themeChanged = syncPageTheme();
-    if (location.pathname !== lastPath) {
-      lastPath = location.pathname;
-      if (!onInsightsRoute()) {
+    const active = onInsightsRoute();
+    if (active !== lastActive) {
+      lastActive = active;
+      if (!active) {
         window.AAP_INSIGHTS_NAV?.removeViewToggle("monetization");
         selector?.remove();
         selector = null;

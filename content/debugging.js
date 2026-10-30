@@ -129,7 +129,7 @@
     }
   })();
 
-  const onRoute = () => ROUTE_RE.test(location.pathname);
+  const onRoute = () => ROUTE_RE.test(location.pathname) && (self.AAP_FEATURES?.enabled("debugging") ?? true);
 
   // Warmed by other Insights tabs during idle time (see range.js): the
   // requests this overview makes first, at background priority.
@@ -143,7 +143,10 @@
     ]);
   };
 
-  if (onRoute()) document.documentElement.classList.add(OVERVIEW_CLASS);
+  // Hides the native page as soon as the feature switches are read.
+  self.AAP_FEATURES?.onChange(() => {
+    if (onRoute()) document.documentElement.classList.add(OVERVIEW_CLASS);
+  });
 
   function createElement(tag, className, text) {
     const element = document.createElement(tag);

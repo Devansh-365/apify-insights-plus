@@ -27,7 +27,7 @@
   // Match both — the org's analytics requests carry the org context in the
   // token the sniffer picks up, so nothing else needs to change.
   const ROUTE_RE = /^(?:\/organization\/[^/]+)?\/actors\/insights\/monetization\/?$/;
-  const onInsightsRoute = () => ROUTE_RE.test(location.pathname);
+  const onInsightsRoute = () => ROUTE_RE.test(location.pathname) && (self.AAP_FEATURES?.enabled("monetization") ?? true);
   const OVERLAY_CLASS = "aap-overlay";
   const OVERLAY_PAGE_CLASS = "aap-overlay-page";
   const NATIVE_VISIBLE_CLASS = "aap-overlay-native-visible";
