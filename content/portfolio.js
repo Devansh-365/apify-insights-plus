@@ -1,19 +1,30 @@
 /*
  * Actor portfolio: replaces Apify's alphabetical per-Actor table on the
- * Monetization page (Plus view only) with a revenue-ranked table grouped into
- * decision segments (invest, fix, convert, reprice, retire). range.js owns the
- * data and calls render()/remove(); the analysis lives in lib/portfolio.js.
+ * Monetization page (Plus view only) with a revenue-ranked table. Each Actor
+ * has a group (how much it matters) and actions (what to do), and Actors
+ * whose group or actions changed since an earlier day are marked. range.js
+ * owns the data and calls render()/remove(); the analysis lives in
+ * lib/portfolio.js.
  */
 (function () {
   const HOST_CLASS = "aap-portfolio";
   const ACTIVE_CLASS = "aap-portfolio-active";
   const PAGE_SIZE = 25;
   const PREVIOUS_RETRY_MS = 60 * 1000;
+  // Each range's classification is remembered per day so the table can say
+  // what changed since an earlier day. Only the most recently used ranges
+  // are kept.
+  const SNAPSHOT_KEY = "aap.portfolio.snapshots";
+  const SNAPSHOT_SCOPES = 12;
+  const PACE_ACTIONS = ["declining", "growing"];
   const MODEL = self.AAP_PORTFOLIO_MODEL;
 
   const ui = {
-    segment: "all",
-    // "auto" sorts All by revenue and a segment by its dollar impact.
+    group: "all",
+    // An action key, "changed", or null for any.
+    action: null,
+    // "auto" sorts by what the filter is about: an action by its dollar
+    // impact, core earners by profit, everything else by revenue.
     sort: "auto",
     direction: "desc",
     query: "",
@@ -22,6 +33,9 @@
   let host = null;
   let lastInput = null;
   let lastAnalysis = null;
+  // { [scope]: { latest, baseline, usedAt } } once read from storage.
+  let snapshots = null;
+  let snapshotsRead = false;
   const previousRowsCache = new Map();
   const previousRowsLoading = new Set();
 
@@ -50,6 +64,13 @@
     return month ? AAPR.formatDate(month, { month: "short", year: "numeric" }) : "";
   }
 
+  function dayLabel(day) {
+    return day ? AAPR.formatDate(day, { month: "short", day: "numeric" }) : "";
+  }
+
+  const groupOf = (key) => MODEL.GROUPS.find((group) => group.key === key);
+  const actionOf = (key) => MODEL.ACTIONS.find((action) => action.key === key);
+
   function nativeTableWrapper() {
     return document.querySelector('[class*="InsightsChartsWrapper"] [class*="simple_table_wrapper"]');
   }
@@ -67,20 +88,23 @@
 
   // Pace needs the month before the latest month. When the range does not
   // include it, fetch that one breakdown (cached by the API layer) once.
+  // `loading` says pace is still on its way, as opposed to unavailable.
   function previousRowsFor(data, rowsByMonth) {
+    const none = { rows: null, loading: false };
     const months = Object.keys(rowsByMonth).sort();
     const latest = months[months.length - 1];
-    if (!latest) return null;
+    if (!latest) return none;
     const previous = MODEL.previousMonthKey(latest);
-    if (rowsByMonth[previous]) return null;
+    if (rowsByMonth[previous]) return none;
     // rangeData fetches the previous month in the same batch as the range.
-    if (data?.previousBreakdownRows?.month === previous) return data.previousBreakdownRows.rows;
+    if (data?.previousBreakdownRows?.month === previous) return { rows: data.previousBreakdownRows.rows, loading: false };
     const key = scopeKey(previous);
     const cached = previousRowsCache.get(key);
-    if (cached?.rows) return cached.rows;
+    if (cached?.rows) return { rows: cached.rows, loading: false };
     // A failed fetch is retried after a minute instead of disabling pace.
-    if (cached && Date.now() - cached.failedAt < PREVIOUS_RETRY_MS) return null;
-    if (!previousRowsLoading.has(key) && self.AAP_API?.actorBreakdown) {
+    if (cached && Date.now() - cached.failedAt < PREVIOUS_RETRY_MS) return none;
+    if (!self.AAP_API?.actorBreakdown) return none;
+    if (!previousRowsLoading.has(key)) {
       previousRowsLoading.add(key);
       self.AAP_API.actorBreakdown(previous, [], { priority: "foreground" })
         .then((raw) => previousRowsCache.set(key, { rows: MODEL.normalizeRows(raw) }))
@@ -90,23 +114,94 @@
           if (lastInput) render(lastInput.data, lastInput.context, true);
         });
     }
-    return null;
+    return { rows: null, loading: true };
+  }
+
+  // Snapshots are read once per page; the table waits for them so an Actor
+  // is never first shown without the tags it holds and then moved.
+  function readSnapshots() {
+    if (snapshotsRead) return;
+    snapshotsRead = true;
+    Promise.resolve()
+      .then(() => chrome.storage.local.get(SNAPSHOT_KEY))
+      .then((result) => result?.[SNAPSHOT_KEY])
+      .catch(() => null)
+      .then((value) => {
+        snapshots = value && typeof value === "object" ? value : {};
+        if (lastInput) render(lastInput.data, lastInput.context, true);
+      });
+  }
+
+  function saveSnapshot(scope, entry) {
+    const next = { ...snapshots, [scope]: entry };
+    snapshots = Object.fromEntries(Object.entries(next)
+      .sort((left, right) => (right[1]?.usedAt || 0) - (left[1]?.usedAt || 0))
+      .slice(0, SNAPSHOT_SCOPES));
+    try {
+      chrome.storage.local.set({ [SNAPSHOT_KEY]: snapshots })?.catch?.(() => {});
+    } catch {
+      // Remembering is a convenience; the table works without it.
+    }
+  }
+
+  // Today's date where the user is, so "since yesterday" follows their day.
+  function localDay(now = new Date()) {
+    const pad = (value) => String(value).padStart(2, "0");
+    return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  }
+
+  // Classify with what this range had last time (so tags hold until clearly
+  // past their line), mark what changed since an earlier day, and remember
+  // today's result. A classification still waiting for pace is not saved.
+  function classify(rowsByMonth, previous) {
+    const months = Object.keys(rowsByMonth).sort();
+    const scope = `${self.AAP_CONTEXT?.decisionScope?.() || "personal"}|${months[0] || ""}|${months[months.length - 1] || ""}`;
+    const entry = snapshots[scope] || {};
+    const today = localDay();
+    const baseline = entry.latest && entry.latest.day !== today ? entry.latest : entry.baseline || null;
+    const analysis = MODEL.analyze({
+      rowsByMonth,
+      previousRows: previous.rows,
+      paceLoading: previous.loading,
+      sticky: entry.latest || null,
+    });
+    MODEL.compareSnapshot(analysis, baseline);
+    if (!analysis.thresholds.paceLoading) {
+      const latest = MODEL.snapshot(analysis, today);
+      if (baseline !== entry.baseline || JSON.stringify(latest) !== JSON.stringify(entry.latest)) {
+        saveSnapshot(scope, { latest, baseline, usedAt: Date.now() });
+      }
+    }
+    return analysis;
+  }
+
+  function matches(row, group = ui.group, action = ui.action) {
+    if (group !== "all" && row.group !== group) return false;
+    if (action === "changed") return !!row.change;
+    return !action || MODEL.hasAction(row, action);
+  }
+
+  // The column the automatic sort uses, or "impact" for the selected action.
+  function autoSortKey() {
+    if (actionOf(ui.action)) return "impact";
+    return ui.group === "core" && !ui.action ? "profit" : "revenue";
   }
 
   function sortValue(row, key) {
     if (key === "name") return row.title.toLowerCase();
     if (key === "users") return row.payingUsers * 1e6 + row.freeUsers;
+    if (key === "impact") return row.actions.find((item) => item.key === ui.action)?.impact ?? -Infinity;
     return row[key] ?? -Infinity;
   }
 
   function visibleRows(analysis) {
     const query = ui.query.trim().toLowerCase();
     const rows = analysis.rows.filter((row) => (
-      (ui.segment === "all" || row.primary === ui.segment)
+      matches(row)
       && (!query || `${row.title} ${row.name}`.toLowerCase().includes(query))
     ));
     const sign = ui.direction === "asc" ? 1 : -1;
-    const key = ui.sort === "auto" ? (ui.segment === "all" ? "revenue" : "impact") : ui.sort;
+    const key = ui.sort === "auto" ? autoSortKey() : ui.sort;
     return rows.sort((left, right) => {
       const a = sortValue(left, key);
       const b = sortValue(right, key);
@@ -147,9 +242,11 @@
       summaryTile(
         "Growing",
         count(summary.growingCount),
-        thresholds.paceReady
-          ? (summary.growingCount ? `+${money(summary.growingGain)}/mo pace` : "No material growth yet")
-          : `Pace starts after ${thresholds.minPaceDays} days of the month`,
+        thresholds.paceLoading
+          ? "Checking trends…"
+          : thresholds.paceReady
+            ? (summary.growingCount ? `+${money(summary.growingGain)}/mo pace` : "No material growth yet")
+            : `Pace starts after ${thresholds.minPaceDays} days of the month`,
         summary.growingCount ? "good" : "neutral",
       ),
       summaryTile(
@@ -163,23 +260,92 @@
     return grid;
   }
 
-  function renderTabs(analysis) {
-    const tabs = createElement("div", "aap-portfolio-tabs");
-    tabs.setAttribute("role", "group");
-    tabs.setAttribute("aria-label", "Actor segments");
-    for (const segment of [{ key: "all", label: "All" }, ...MODEL.SEGMENTS]) {
-      const total = analysis.counts[segment.key] || 0;
-      if (!total && segment.key !== "all" && ui.segment !== segment.key) continue;
-      const button = createElement("button", "aap-portfolio-tab");
-      button.type = "button";
-      button.dataset.segment = segment.key;
-      button.setAttribute("aria-pressed", String(ui.segment === segment.key));
-      if (segment.action) button.title = segment.action;
-      button.append(createElement("span", null, segment.label), createElement("span", "aap-portfolio-tab-count", count(total)));
-      if (!total && segment.key !== "all") button.classList.add("aap-portfolio-tab-empty");
-      tabs.appendChild(button);
+  function filterChip(kind, key, label, total, { pressed = false, tone = null, title = "", pending = false } = {}) {
+    const button = createElement("button", "aap-portfolio-tab");
+    button.type = "button";
+    button.dataset[kind] = key;
+    button.setAttribute("aria-pressed", String(pressed));
+    if (title) button.title = title;
+    if (tone) button.appendChild(createElement("span", `aap-portfolio-tab-dot aap-portfolio-tab-dot-${tone}`));
+    button.append(createElement("span", null, label), createElement("span", "aap-portfolio-tab-count", pending ? "…" : count(total)));
+    if (pending) {
+      button.disabled = true;
+      button.setAttribute("aria-busy", "true");
+    } else if (!total && !pressed) {
+      button.classList.add("aap-portfolio-tab-empty");
     }
-    return tabs;
+    return button;
+  }
+
+  function filterRow(label, className, { visibleLabel = false } = {}) {
+    const row = createElement("div", `aap-portfolio-filter-row ${className}`);
+    row.setAttribute("role", "group");
+    row.setAttribute("aria-label", label);
+    if (visibleLabel) row.appendChild(createElement("span", "aap-portfolio-filter-label", label));
+    const chips = createElement("div", "aap-portfolio-tabs");
+    row.appendChild(chips);
+    return { row, chips };
+  }
+
+  // Two filters that combine on one line: a segmented control for the group
+  // (exactly one applies) and toggle chips for the action an Actor needs. Each
+  // count is the Actors it would show with the other filter kept, and every
+  // chip stays in place (empty ones dim) so the line does not shift.
+  function renderFilters(analysis) {
+    const filters = createElement("div", "aap-portfolio-filters");
+    const tally = (group, action) => analysis.rows.filter((row) => matches(row, group, action)).length;
+    const groups = filterRow("Group", "aap-portfolio-segmented");
+    groups.chips.appendChild(filterChip("group", "all", "All", tally("all", ui.action), { pressed: ui.group === "all" }));
+    for (const group of MODEL.GROUPS) {
+      groups.chips.appendChild(filterChip("group", group.key, group.label, tally(group.key, ui.action), {
+        pressed: ui.group === group.key,
+        title: group.action,
+      }));
+    }
+    const actions = filterRow("Needs action", "aap-portfolio-action-filters", { visibleLabel: true });
+    const { paceLoading } = analysis.thresholds;
+    for (const action of MODEL.ACTIONS) {
+      const pending = paceLoading && PACE_ACTIONS.includes(action.key);
+      actions.chips.appendChild(filterChip("action", action.key, action.label, tally(ui.group, action.key), {
+        pressed: ui.action === action.key,
+        tone: action.tone,
+        title: pending ? `Checking trends against ${monthLabel(MODEL.previousMonthKey(analysis.latestMonth))}…` : action.action,
+        pending,
+      }));
+    }
+    if (analysis.changes) {
+      actions.chips.appendChild(createElement("span", "aap-portfolio-filter-sep"));
+      actions.chips.appendChild(filterChip("action", "changed", `Changed since ${dayLabel(analysis.changes.since)}`, tally(ui.group, "changed"), {
+        pressed: ui.action === "changed",
+        tone: "accent",
+        title: `Actors whose group or actions are different from ${dayLabel(analysis.changes.since)}.`,
+      }));
+    }
+    filters.append(groups.row, actions.row);
+    return filters;
+  }
+
+  function renderNote(analysis) {
+    const note = createElement("div", "aap-portfolio-segment-note");
+    const action = actionOf(ui.action);
+    const group = groupOf(ui.group);
+    const explain = (item) => note.append(
+      createElement("strong", null, item.action),
+      createElement("span", null, ` Rule: ${item.rule(analysis.thresholds)}`),
+    );
+    if (ui.action === "changed" && analysis.changes) {
+      note.append(
+        createElement("strong", null, `What moved since ${dayLabel(analysis.changes.since)}.`),
+        createElement("span", null, " An Actor is listed when its group changed or it gained or lost an action. Growing and Declining are compared only when both days had a month to compare against."),
+      );
+    } else if (action) {
+      explain(action);
+    } else if (group) {
+      explain(group);
+    } else {
+      return null;
+    }
+    return note;
   }
 
   const COLUMNS = [
@@ -196,7 +362,7 @@
     const row = document.createElement("tr");
     for (const column of COLUMNS) {
       const cell = createElement("th", column.align === "left" ? "aap-portfolio-left" : null);
-      const active = ui.sort === column.key || (ui.sort === "auto" && ui.segment === "all" && column.key === "revenue");
+      const active = ui.sort === column.key || (ui.sort === "auto" && autoSortKey() === column.key);
       cell.setAttribute("aria-sort", active ? (ui.direction === "asc" ? "ascending" : "descending") : "none");
       const button = createElement("button", "aap-portfolio-sort", column.label);
       button.type = "button";
@@ -222,14 +388,25 @@
     const change = Math.round(pace.change * 100);
     if (Math.abs(change) < 5) return { text: "→ steady", tone: "" };
     return {
-      text: `${change > 0 ? "↑ +" : "↓ "}${change}% pace`,
+      text: `${change > 0 ? "↑ +" : "↓ −"}${Math.abs(change)}% pace`,
       tone: change > 0 ? "aap-portfolio-good" : "aap-portfolio-bad",
     };
   }
 
-  function renderRow(row) {
+  // "Since Oct 29: Long tail → Core earners · now Growing · no longer Declining".
+  function changeText(row, since) {
+    const { change } = row;
+    const labels = (keys) => keys.map((key) => actionOf(key)?.label || key).join(", ");
+    const parts = [];
+    if (change.group) parts.push(`${groupOf(change.group)?.label || change.group} → ${groupOf(row.group)?.label || row.group}`);
+    if (change.added.length) parts.push(`now ${labels(change.added)}`);
+    if (change.removed.length) parts.push(`no longer ${labels(change.removed)}`);
+    return `Since ${dayLabel(since)}: ${parts.join(" · ")}`;
+  }
+
+  function renderRow(row, analysis) {
     const tr = document.createElement("tr");
-    if (row.primary === "idle") tr.className = "aap-portfolio-row-idle";
+    if (row.group === "idle") tr.className = "aap-portfolio-row-idle";
 
     const actor = createElement("td", "aap-portfolio-actor aap-portfolio-left");
     const link = createElement("a", "aap-portfolio-actor-link");
@@ -250,16 +427,30 @@
     text.appendChild(createElement("small", null, meta.filter(Boolean).join(" · ")));
     link.appendChild(text);
     actor.appendChild(link);
-    if (row.signals.length) {
+    // One line under the name: action tags (label plus the number behind it;
+    // the money impact and rule are in the tooltip), then context as text.
+    if (row.actions.length || row.notes.length) {
       const chips = createElement("span", "aap-portfolio-signals");
-      for (const signal of row.signals.slice(0, 3)) {
-        chips.appendChild(createElement(
-          "span",
-          `aap-portfolio-signal aap-portfolio-signal-${signal.tone}`,
-          signal.detail ? `${signal.text} · ${signal.detail}` : signal.text,
-        ));
+      for (const item of row.actions) {
+        const action = actionOf(item.key);
+        const tag = createElement("span", `aap-portfolio-signal aap-portfolio-signal-${action.tone}`);
+        tag.append(createElement("strong", null, action.label));
+        if (item.text) tag.append(createElement("span", null, item.text));
+        tag.title = `${item.detail ? `${item.detail}. ` : ""}${action.action} Rule: ${action.rule(analysis.thresholds)}`;
+        chips.appendChild(tag);
+      }
+      if (row.notes.length) {
+        const notes = createElement("span", "aap-portfolio-signal-notes");
+        row.notes.forEach((note, index) => {
+          if (index) notes.append(document.createTextNode(" · "));
+          notes.appendChild(createElement("span", `aap-portfolio-note-${note.tone}`, note.text));
+        });
+        chips.appendChild(notes);
       }
       actor.appendChild(chips);
+    }
+    if (row.change && analysis.changes) {
+      actor.appendChild(createElement("span", "aap-portfolio-change", changeText(row, analysis.changes.since)));
     }
 
     const revenue = createElement("td", "aap-portfolio-revenue");
@@ -278,7 +469,7 @@
     }
     revenue.appendChild(revenueDetail);
 
-    const losing = row.profit < 0 && row.primary === "reprice";
+    const losing = row.profit < 0 && MODEL.hasAction(row, "reprice");
     const profit = cell(
       money(row.profit),
       row.margin == null ? (row.cost > 0 ? `${money(row.cost)} cost` : "–") : `${percent(row.margin)} margin`,
@@ -290,14 +481,14 @@
       `${count(row.payingUsers)} paying`,
       row.users ? `${count(row.freeUsers)} free · ${percent(row.payingShare)} pay` : "no users",
       "",
-      row.primary === "untapped" ? "aap-portfolio-warning" : "",
+      MODEL.hasAction(row, "untapped") ? "aap-portfolio-warning" : "",
     );
 
     const runs = cell(
       count(row.runs),
       !row.runs ? "no runs" : row.failures ? `${percent(row.failureRate, 1)} failed` : "no failures",
       "",
-      row.primary === "fix" ? "aap-portfolio-bad" : "",
+      MODEL.hasAction(row, "fix") ? "aap-portfolio-bad" : "",
     );
 
     const results = cell(
@@ -343,11 +534,15 @@
     table.setAttribute("aria-label", "Actor portfolio");
     table.appendChild(renderHead());
     const body = document.createElement("tbody");
-    for (const row of rows.slice(first, first + PAGE_SIZE)) body.appendChild(renderRow(row));
+    for (const row of rows.slice(first, first + PAGE_SIZE)) body.appendChild(renderRow(row, analysis));
     if (!rows.length) {
       const empty = document.createElement("tr");
-      const segment = MODEL.SEGMENTS.find((item) => item.key === ui.segment);
-      const message = createElement("td", "aap-portfolio-empty", ui.query ? "No Actors match this search." : `No Actors in “${segment?.label || "this segment"}” right now.`);
+      const filters = [groupOf(ui.group)?.label, actionOf(ui.action)?.label].filter(Boolean).map((label) => `“${label}”`).join(" with ");
+      const message = createElement("td", "aap-portfolio-empty", ui.query
+        ? "No Actors match this search."
+        : ui.action === "changed"
+          ? `Nothing changed since ${dayLabel(analysis.changes?.since)}${groupOf(ui.group) ? ` in “${groupOf(ui.group).label}”` : ""}.`
+          : `No Actors in ${filters || "this view"} right now.`);
       message.colSpan = COLUMNS.length;
       empty.appendChild(message);
       body.appendChild(empty);
@@ -381,18 +576,21 @@
   }
 
   function onHostClick(event) {
-    const tab = event.target.closest("[data-segment]");
+    const group = event.target.closest("[data-group]");
+    const action = event.target.closest("[data-action]");
     const sort = event.target.closest("[data-sort]");
     const page = event.target.closest("[data-page]");
-    if (tab) {
-      ui.segment = tab.dataset.segment;
+    if (group || action) {
+      if (group) ui.group = group.dataset.group;
+      // Clicking the selected action again shows every action.
+      else ui.action = ui.action === action.dataset.action ? null : action.dataset.action;
       ui.sort = "auto";
       ui.direction = "desc";
       ui.page = 0;
     } else if (sort) {
       const key = sort.dataset.sort;
-      // On "All", the automatic sort is revenue, so clicking Revenue flips it.
-      const isCurrentSort = ui.sort === key || (ui.sort === "auto" && ui.segment === "all" && key === "revenue");
+      // The automatic sort's column flips when clicked.
+      const isCurrentSort = ui.sort === key || (ui.sort === "auto" && autoSortKey() === key);
       if (isCurrentSort) ui.direction = ui.direction === "asc" ? "desc" : "asc";
       else {
         ui.sort = key;
@@ -449,17 +647,9 @@
       if (!body.querySelector(".aap-portfolio-loading")) body.replaceChildren(renderLoading());
       return;
     }
-    const segment = MODEL.SEGMENTS.find((item) => item.key === ui.segment);
-    const note = createElement("div", "aap-portfolio-segment-note");
-    if (segment) {
-      note.append(
-        createElement("strong", null, segment.action),
-        createElement("span", null, ` Rule: ${segment.rule(lastAnalysis.thresholds)}`),
-      );
-    } else {
-      note.textContent = "Every Actor appears in exactly one segment, checked in this order: fix, declining, reprice, growing, core, untapped, long tail, idle. Hover a segment for its action.";
-    }
-    body.replaceChildren(renderSummary(lastAnalysis), renderTabs(lastAnalysis), note, ...renderTable(lastAnalysis));
+    // "Changed" goes away when there is nothing to compare against.
+    if (ui.action === "changed" && !lastAnalysis.changes) ui.action = null;
+    body.replaceChildren(...[renderSummary(lastAnalysis), renderFilters(lastAnalysis), renderNote(lastAnalysis), ...renderTable(lastAnalysis)].filter(Boolean));
   }
 
   function render(data, context = {}, force = false) {
@@ -469,22 +659,25 @@
       return;
     }
     if (!MODEL || !ensureHost()) return;
+    readSnapshots();
     const rowsByMonth = data?.actorBreakdownRows || null;
-    const previousRows = rowsByMonth ? previousRowsFor(data, rowsByMonth) : null;
-    if (!force && lastInput && lastInput.data === data && lastInput.previousRows === previousRows) return;
-    lastInput = { data, context, previousRows };
-    lastAnalysis = rowsByMonth ? MODEL.analyze({ rowsByMonth, previousRows }) : null;
+    const previous = rowsByMonth ? previousRowsFor(data, rowsByMonth) : { rows: null, loading: false };
+    if (!force && lastInput && lastInput.data === data && lastInput.previousRows === previous.rows) return;
+    lastInput = { data, context, previousRows: previous.rows };
+    lastAnalysis = rowsByMonth && snapshots ? classify(rowsByMonth, previous) : null;
 
     const caption = host.querySelector(".aap-portfolio-caption");
     if (lastAnalysis) {
       const months = lastAnalysis.months;
       const period = months.length > 1 ? `${monthLabel(months[0])} – ${monthLabel(months[months.length - 1])}` : monthLabel(months[0]);
       const { thresholds } = lastAnalysis;
-      const pace = !lastAnalysis.comparisonMonth
-        ? ""
-        : thresholds.paceReady
-          ? ` Pace compares revenue per day in ${monthLabel(lastAnalysis.latestMonth)} with ${monthLabel(lastAnalysis.comparisonMonth)}.`
-          : ` Pace starts after ${thresholds.minPaceDays} days of ${monthLabel(lastAnalysis.latestMonth)}.`;
+      const pace = thresholds.paceLoading
+        ? ` Checking trends against ${monthLabel(MODEL.previousMonthKey(lastAnalysis.latestMonth))}…`
+        : !lastAnalysis.comparisonMonth
+          ? ""
+          : thresholds.paceReady
+            ? ` Pace compares revenue per day in ${monthLabel(lastAnalysis.latestMonth)} with ${monthLabel(lastAnalysis.comparisonMonth)}.`
+            : ` Pace starts after ${thresholds.minPaceDays} days of ${monthLabel(lastAnalysis.latestMonth)}.`;
       caption.textContent = `Monthly totals for ${period}. Changes under ${money(thresholds.materiality)}/month are treated as noise.${pace}`;
     } else {
       caption.textContent = "Loading Actor performance…";

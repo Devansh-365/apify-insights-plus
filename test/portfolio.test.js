@@ -77,51 +77,145 @@ assert.equal(single.comparisonMonth, "2026-09-01");
 assert.equal(single.thresholds.paceReady, true);
 assert.ok(single.thresholds.materiality >= 1);
 
-assert.equal(byId.flaky.primary, "fix");
+const has = (row, key) => model.hasAction(row, key);
+const action = (row, key) => row.actions.find((item) => item.key === key);
+
+assert.ok(has(byId.flaky, "fix"));
 assert.ok(Math.abs(byId.flaky.failureRate - 0.15) < 1e-9);
-assert.notEqual(byId.aborty.primary, "fix");
-assert.notEqual(byId.tiny.primary, "fix");
+assert.equal(action(byId.flaky, "fix").text, "6 failed (15.0%)");
+assert.ok(!has(byId.aborty, "fix"));
+assert.ok(!has(byId.tiny, "fix"));
 
-assert.equal(byId.fading.primary, "declining");
-assert.ok(byId.fading.signals.some((signal) => signal.text === "-2 paying users"));
-assert.notEqual(byId.noise.primary, "growing");
-assert.equal(byId.rising.primary, "growing");
-assert.ok(byId.rising.signals.some((signal) => signal.text === "+2 paying users"));
-assert.ok(Math.abs(byId.rising.impact - ((0.8 - 0.1) * 30)) < 1e-9);
+assert.ok(has(byId.fading, "declining"));
+assert.match(action(byId.fading, "declining").text, /^−\d+%\/day vs Sep$/);
+assert.ok(byId.fading.notes.some((note) => note.text === "-2 paying users"));
+assert.ok(!has(byId.noise, "growing"));
+assert.ok(has(byId.rising, "growing"));
+assert.ok(byId.rising.notes.some((note) => note.text === "+2 paying users"));
+assert.ok(Math.abs(action(byId.rising, "growing").impact - ((0.8 - 0.1) * 30)) < 1e-9);
 
-assert.equal(byId.loser.primary, "reprice");
+assert.ok(has(byId.loser, "reprice"));
 // A one-cent loss is below the loss floor.
-assert.notEqual(byId.cents.primary, "reprice");
-assert.equal(byId.freebie.primary, "untapped");
-assert.equal(byId.idle.primary, "idle");
-assert.ok(byId.idle.signals.some((signal) => signal.text === "Deprecated"));
+assert.ok(!has(byId.cents, "reprice"));
+assert.ok(has(byId.freebie, "untapped"));
+assert.equal(byId.idle.group, "idle");
+assert.equal(byId.idle.actions.length, 0);
+assert.ok(byId.idle.notes.some((note) => note.text === "Deprecated"));
 
-// Core earners rank by profit and only take the primary slot when nothing more
-// urgent applies, but always carry the context chip.
-// star goes from $5/day to $5.50/day (+10%), below the growth bar.
+// Core earners rank by profit and keep their group whatever their actions.
 assert.ok(byId.star.isCore);
-assert.equal(byId.star.primary, "core");
-assert.ok(byId.star.signals.some((signal) => signal.text.startsWith("Core")));
-assert.equal(byId.steady.primary, "core");
-// A core earner that is also failing is shown as "fix", keeping the core chip.
+assert.equal(byId.star.group, "core");
+assert.equal(byId.steady.group, "core");
+assert.equal(byId.flaky.group, "tail");
+// A core earner that starts failing stays a core earner, tagged "fix".
 const failingCore = model.analyze({
   rowsByMonth: { "2026-10-01": october.map((row) => (row.id === "star" ? { ...row, failed: 10 } : row)) },
   previousRows: september,
   now,
 }).rows.find((row) => row.id === "star");
-assert.equal(failingCore.primary, "fix");
-assert.ok(failingCore.signals.some((signal) => signal.text.startsWith("Core")));
+assert.equal(failingCore.group, "core");
+assert.ok(has(failingCore, "fix"));
 
-// Every Actor has exactly one primary segment.
-const segmentTotal = model.SEGMENTS.reduce((sum, segment) => sum + single.counts[segment.key], 0);
-assert.equal(segmentTotal, single.counts.all);
-assert.equal(single.summary.actionCount, single.counts.fix + single.counts.declining + single.counts.reprice);
+// Every Actor has exactly one group; counts add up to all.
+const groupTotal = model.GROUPS.reduce((sum, group) => sum + single.counts.groups[group.key], 0);
+assert.equal(groupTotal, single.counts.all);
+assert.equal(single.counts.actions.fix, single.rows.filter((row) => has(row, "fix")).length);
+assert.equal(single.summary.coreCount, single.counts.groups.core);
+assert.equal(
+  single.summary.actionCount,
+  single.rows.filter((row) => ["fix", "declining", "reprice"].some((key) => has(row, key))).length,
+);
 
 // Too early in the month: no pace, so nothing is growing or declining.
 const early = model.analyze({ rowsByMonth: { "2026-10-01": october }, previousRows: september, now: Date.UTC(2026, 9, 4) });
 assert.equal(early.thresholds.paceReady, false);
-assert.equal(early.counts.growing, 0);
-assert.equal(early.counts.declining, 0);
+assert.equal(early.counts.actions.growing, 0);
+assert.equal(early.counts.actions.declining, 0);
+
+// While the comparison month loads, pace is marked as loading, not absent.
+const loading = model.analyze({ rowsByMonth: { "2026-10-01": october }, paceLoading: true, now });
+assert.equal(loading.thresholds.paceLoading, true);
+assert.equal(loading.counts.actions.growing, 0);
+
+// Tags hold until the Actor is clearly past the line. "edge" fails 4.5% of
+// runs: not enough to start "Fix reliability", enough to keep it.
+const edgeOctober = [...october, ...model.normalizeRows([item("edge", { revenue: 4, cost: 0.2, paying: 3, runs: 200, failed: 9 })])];
+const fresh = model.analyze({ rowsByMonth: { "2026-10-01": edgeOctober }, previousRows: september, now });
+const edgeFresh = fresh.rows.find((row) => row.id === "edge");
+assert.ok(!has(edgeFresh, "fix"));
+const held = model.analyze({
+  rowsByMonth: { "2026-10-01": edgeOctober },
+  previousRows: september,
+  sticky: { day: "2026-10-10", pace: true, actors: { edge: ["tail", "fix"] } },
+  now,
+});
+assert.ok(has(held.rows.find((row) => row.id === "edge"), "fix"));
+// Under 4% the tag goes.
+const recovered = model.analyze({
+  rowsByMonth: { "2026-10-01": edgeOctober.map((row) => (row.id === "edge" ? { ...row, failed: 7 } : row)) },
+  previousRows: september,
+  sticky: { day: "2026-10-10", pace: true, actors: { edge: ["tail", "fix"] } },
+  now,
+});
+assert.ok(!has(recovered.rows.find((row) => row.id === "edge"), "fix"));
+
+// A core earner from the last snapshot stays core within the top 85% of
+// profit; without the snapshot the 80% line decides.
+const coreRows = model.normalizeRows([
+  item("big", { revenue: 70, paying: 5, runs: 10 }),
+  item("mid", { revenue: 12, paying: 3, runs: 10 }),
+  item("small", { revenue: 8, paying: 2, runs: 10 }),
+  item("tiny2", { revenue: 10, paying: 2, runs: 10 }),
+]);
+// Profit: big 70 + mid 12 reach 80%; tiny2 (10) brings it to 92%.
+const coreFresh = model.analyze({ rowsByMonth: { "2026-10-01": coreRows }, now });
+assert.equal(coreFresh.rows.find((row) => row.id === "tiny2").group, "tail");
+const coreHeld = model.analyze({
+  rowsByMonth: { "2026-10-01": coreRows },
+  sticky: { day: "2026-10-10", pace: false, actors: { tiny2: ["core"], small: ["core"] } },
+  now,
+});
+assert.equal(coreHeld.rows.find((row) => row.id === "tiny2").group, "core");
+// Past the 85% line a former core earner drops to the long tail.
+assert.equal(coreHeld.rows.find((row) => row.id === "small").group, "tail");
+
+// Snapshots round-trip, and compareSnapshot marks what changed since.
+const snap = model.snapshot(single, "2026-10-10");
+assert.equal(snap.day, "2026-10-10");
+assert.equal(snap.pace, true);
+// flaky is new this month: failing and earning for the first time, which
+// one category used to hide behind "fix".
+assert.deepEqual([...snap.actors.flaky], ["tail", "fix", "growing"]);
+assert.equal(model.compareSnapshot(model.analyze({ rowsByMonth: { "2026-10-01": october }, previousRows: september, now }), snap).changes.count, 0);
+const moved = model.compareSnapshot(failingCoreAnalysis(), snap);
+const movedStar = moved.rows.find((row) => row.id === "star");
+assert.deepEqual([...movedStar.change.added], ["fix"]);
+assert.equal(movedStar.change.group, null);
+assert.equal(moved.changes.since, "2026-10-10");
+assert.ok(moved.changes.count >= 1);
+// A group change names the old group.
+const demoted = model.compareSnapshot(single, { day: "2026-10-09", pace: true, actors: { ...snap.actors, flaky: ["core", "fix"] } });
+assert.equal(demoted.rows.find((row) => row.id === "flaky").change.group, "core");
+// Without pace on both sides, growing and declining are not compared.
+const noPace = model.compareSnapshot(single, { day: "2026-10-09", pace: false, actors: { ...snap.actors, rising: ["tail"] } });
+assert.equal(noPace.rows.find((row) => row.id === "rising").change, null);
+const withPace = model.compareSnapshot(single, { day: "2026-10-09", pace: true, actors: { ...snap.actors, rising: ["tail"] } });
+assert.deepEqual([...withPace.rows.find((row) => row.id === "rising").change.added], ["growing"]);
+// Nothing to compare against: no changes.
+assert.equal(model.compareSnapshot(single, null).changes, null);
+
+function failingCoreAnalysis() {
+  return model.analyze({
+    rowsByMonth: { "2026-10-01": october.map((row) => (row.id === "star" ? { ...row, failed: 10 } : row)) },
+    previousRows: september,
+    now,
+  });
+}
+
+// Without comparison data there is no pace.
+const noComparison = model.analyze({ rowsByMonth: { "2026-10-01": october }, now });
+assert.equal(noComparison.comparisonMonth, null);
+assert.equal(noComparison.counts.actions.growing, 0);
 
 // A two-month range sums money and runs, keeps peak monthly users, and uses
 // the in-range previous month for pace instead of an extra request.
@@ -132,11 +226,6 @@ assert.equal(rangeStar.revenue, 205);
 assert.equal(rangeStar.runs, 400);
 assert.equal(rangeStar.payingUsers, 6);
 assert.equal(rangeStar.freeUsers, 5);
-
-// Without comparison data there is no pace.
-const noComparison = model.analyze({ rowsByMonth: { "2026-10-01": october }, now });
-assert.equal(noComparison.comparisonMonth, null);
-assert.equal(noComparison.counts.growing, 0);
 
 // Duplicate Actor entries within one month are merged, not summed.
 const duplicated = model.normalizeRows([

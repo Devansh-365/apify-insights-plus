@@ -53,6 +53,20 @@
       ],
     },
   ];
+  // The Monetization chart's tabs, keyed by the id Apify gives each tab link.
+  // Each answers its own question: where revenue comes from (stacked by
+  // Actor), whether spend is creeping up (one Coral bar per period against
+  // its average), whether a day made or lost money, and whether pricing
+  // holds up (margin as a line against the overall margin).
+  const MONEY_TABS = {
+    revenueUsd: { metric: "revenue", label: "Revenue", kind: "actors", sort: "revenue", hint: "Pin a bar to see which Actors earned it." },
+    costUsd: { metric: "cost", label: "Costs", kind: "total", sort: "cost", hint: "The dashed line is the average. Pin a bar to see which Actors cost the most." },
+    profitUsd: { metric: "profit", label: "Profit", kind: "signed", sort: "profit", hint: "Revenue minus costs; red bars lost money. The dashed line is the average." },
+    margin: { metric: "margin", label: "Margin", kind: "ratio", sort: "revenue", hint: "Profit as a share of revenue; the dashed line is the overall margin. Periods without revenue are left out." },
+  };
+  const DEFAULT_MONEY_TAB = "revenueUsd";
+  const NEGATIVE_COLOR = "#ef4444";
+  const MARGIN_FLOOR = -1;
   const ACTOR_COLOR_PALETTE = ["#2dd4bf", "#60a5fa", "#f472b6", "#facc15", "#a78bfa", "#fb923c", "#34d399", "#f87171"];
   const MUTED_ACTOR_COLOR = "#6b7280";
   const TOOLTIP_ACTOR_COUNT_KEY = "aap.tooltipActorCount";
@@ -152,6 +166,7 @@
   let rangeTooltip = null;
   let rangeTooltipState = {
     period: null,
+    tab: null,
     sort: "revenue",
     direction: "desc",
     pinned: false,
@@ -656,6 +671,17 @@
     return CHART_DEFS.find((definition) => heading === definition.heading) || null;
   }
 
+  // Apify marks the selected tab with an "_active" class; Revenue is its
+  // default.
+  function activeMoneyTab(wrapper) {
+    for (const id of Object.keys(MONEY_TABS)) {
+      for (let node = wrapper?.querySelector(`a#${id}`); node && node !== wrapper; node = node.parentElement) {
+        if (node.classList.contains("_active") || node.getAttribute("aria-selected") === "true") return id;
+      }
+    }
+    return DEFAULT_MONEY_TAB;
+  }
+
   function chartHost(wrapper, definition) {
     if (definition.key === "money") return wrapper.querySelector('[class*="PaidActorProfitMarginChart"]');
     return wrapper.querySelector("canvas")?.parentElement || null;
@@ -760,7 +786,7 @@
     if (!description) return;
     const grouping = groupingAdjective();
     const labels = {
-      money: `Selected months: ${rangeLabel(state.range)}. Only paying users generate revenue and costs; runs by free users aren't included. Pin a revenue bar to load Actor details.`,
+      money: `Selected months: ${rangeLabel(state.range)}. Only paying users generate revenue and costs; runs by free users aren't included. ${MONEY_TABS[activeMoneyTab(wrapper)].hint}`,
       cost: `${grouping[0].toUpperCase()}${grouping.slice(1)} cost per 1,000 results for ${rangeLabel(state.range)}.`,
       results: `${grouping[0].toUpperCase()}${grouping.slice(1)} results for ${rangeLabel(state.range)}.`,
       runs: `${grouping[0].toUpperCase()}${grouping.slice(1)} runs by status for ${rangeLabel(state.range)}.`,
@@ -990,8 +1016,8 @@
 
   function axisValue(value, definition, step = 1) {
     if (definition.key === "money" || definition.key === "cost") {
-      const decimals = value === 0 ? 2 : step >= 1 ? (step % 1 ? 1 : 0) : step >= 0.01 ? 2 : Math.min(6, Math.max(3, Math.ceil(-Math.log10(step)) + 1));
-      return `$${value.toFixed(decimals)}`;
+      const decimals = step >= 1 ? (step % 1 ? 1 : 0) : step >= 0.01 ? 2 : Math.min(6, Math.max(3, Math.ceil(-Math.log10(step)) + 1));
+      return `${value < 0 ? "-" : ""}$${Math.abs(value).toFixed(decimals)}`;
     }
     return formatCount(value);
   }
@@ -1279,13 +1305,88 @@
     });
   }
 
-  function drawRangeChart(chart, definition, data) {
+  // Costs' and profit's reference line is their average per complete period;
+  // margin's is the range's overall margin (total profit / total revenue),
+  // not an average of daily margins.
+  function moneyReference(moneyTab, data, values, partial) {
+    if (moneyTab?.kind === "ratio") {
+      const margin = data.totals?.margin;
+      return margin == null || !Number.isFinite(Number(margin)) ? null : { value: Number(margin), label: `overall ${AAPF.pct(Number(margin))}` };
+    }
+    if (moneyTab?.kind !== "signed" && moneyTab?.kind !== "total") return null;
+    const complete = values.filter((row, index) => !partial[index]).map((row) => row[0]);
+    if (!complete.length) return null;
+    const average = complete.reduce((sum, value) => sum + value, 0) / complete.length;
+    return { value: average, label: `avg ${AAPF.money(average)}` };
+  }
+
+  function formatMarginAxis(value, step) {
+    return `${(value * 100).toFixed(step * 100 < 1 ? 1 : 0)}%`;
+  }
+
+  // A bar is rounded at the end away from zero; a stack is drawn as one bar.
+  function barPath(ctx, x, from, to, width) {
+    const top = Math.min(from, to);
+    const height = Math.abs(to - from);
+    const radius = Math.min(4, width / 4, height);
+    ctx.beginPath();
+    if (typeof ctx.roundRect === "function" && radius >= 1) {
+      ctx.roundRect(x - width / 2, top, width, height, to <= from ? [radius, radius, 0, 0] : [0, 0, radius, radius]);
+    } else {
+      ctx.rect(x - width / 2, top, width, height);
+    }
+  }
+
+  // Monotone curve through a run of points: smooth, but never overshoots a
+  // value the way a plain spline would.
+  function traceCurve(ctx, points) {
+    ctx.moveTo(points[0].x, points[0].y);
+    if (points.length < 3) {
+      points.slice(1).forEach((point) => ctx.lineTo(point.x, point.y));
+      return;
+    }
+    const last = points.length - 1;
+    const dx = [];
+    const slope = [];
+    for (let index = 0; index < last; index++) {
+      dx[index] = points[index + 1].x - points[index].x || 1;
+      slope[index] = (points[index + 1].y - points[index].y) / dx[index];
+    }
+    const tangent = [slope[0]];
+    for (let index = 1; index < last; index++) {
+      const before = slope[index - 1];
+      const after = slope[index];
+      tangent[index] = before * after <= 0
+        ? 0
+        : 3 * (dx[index - 1] + dx[index]) / ((2 * dx[index] + dx[index - 1]) / before + (dx[index] + 2 * dx[index - 1]) / after);
+    }
+    tangent[last] = slope[last - 1];
+    for (let index = 0; index < last; index++) {
+      const third = dx[index] / 3;
+      ctx.bezierCurveTo(
+        points[index].x + third, points[index].y + third * tangent[index],
+        points[index + 1].x - third, points[index + 1].y - third * tangent[index + 1],
+        points[index + 1].x, points[index + 1].y,
+      );
+    }
+  }
+
+  // "#rrggbb" at an opacity, for gradients; other color formats pass through.
+  function colorAlpha(color, alpha) {
+    const match = /^#([0-9a-f]{6})$/i.exec(color || "");
+    if (!match) return color;
+    const value = parseInt(match[1], 16);
+    return `rgba(${value >> 16}, ${(value >> 8) & 255}, ${value & 255}, ${alpha})`;
+  }
+
+  function drawRangeChart(chart, definition, data, tab = null) {
     const { canvas, legend, host } = chart;
     // Keep the last successful chart visible while refreshing its data. The
     // draw is synchronous, so replacing the canvas contents completes before
     // the browser can paint; hiding it first only creates a visible flicker.
     const preserveVisible = !!data && chart.overlay.dataset.aapReady === "true" && !!canvas.__aapRange?.data;
     setRangeChartReady(chart, false, preserveVisible);
+    hideHoverBand(canvas);
     const rect = host.getBoundingClientRect();
     if (rect.width < 2 || rect.height < 2) return;
     const dpr = window.devicePixelRatio || 1;
@@ -1297,196 +1398,358 @@
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, rect.width, rect.height);
-    ctx.font = `12px ${getComputedStyle(host).fontFamily || "sans-serif"}`;
+    const fontFamily = getComputedStyle(host).fontFamily || "sans-serif";
+    ctx.font = `11px ${fontFamily}`;
     ctx.textBaseline = "middle";
 
     const chartStyles = getComputedStyle(chart.overlay);
-    const axisColor = chartStyles.getPropertyValue("--aap-range-chart-text").trim() || "#374151";
-    const gridColor = chartStyles.getPropertyValue("--aap-range-chart-grid").trim() || "rgba(17,24,39,0.14)";
+    const token = (name, fallback) => chartStyles.getPropertyValue(name).trim() || fallback;
+    const axisColor = token("--aap-range-chart-text", "#374151");
+    const mutedColor = token("--aap-range-chart-muted", axisColor);
+    const gridColor = token("--aap-range-chart-grid", "rgba(17,24,39,0.14)");
+    const surfaceColor = token("--aap-range-chart-surface", "#ffffff");
+    const chipColor = token("--aap-range-chart-chip", "rgba(0,0,0,0.06)");
+    const colors = {
+      revenue: token("--aap-range-chart-positive", definition.color),
+      profit: token("--aap-range-chart-positive", definition.color),
+      cost: token("--aap-range-chart-cost", "#fa8238"),
+      margin: token("--aap-range-chart-accent", "#246dff"),
+      negative: token("--aap-range-chart-negative", NEGATIVE_COLOR),
+    };
 
-    const series = rangeSeries(definition, data || { days: [] });
+    // The Monetization chart follows its selected tab; the others have one view.
+    const moneyTab = definition.key === "money" ? MONEY_TABS[tab] || MONEY_TABS[DEFAULT_MONEY_TAB] : null;
+    const series = moneyTab
+      ? [{
+        ...definition,
+        key: moneyTab.metric,
+        label: moneyTab.label,
+        color: colors[moneyTab.metric] || definition.color,
+        value: (row) => row[moneyTab.metric],
+        signed: moneyTab.kind === "signed",
+        type: moneyTab.kind === "ratio" ? "line" : "bar",
+      }]
+      : rangeSeries(definition, data || { days: [] });
     const showLegend = definition.key !== "money" && series.length > 1;
     legend.style.display = showLegend ? "" : "none";
     if (showLegend) updateLegend(legend, series);
     else legend.replaceChildren();
-    canvas.__aapRange = { definition, data: data || null, series };
+    canvas.__aapRange = { definition, data: data || null, series, tab: moneyTab ? tab || DEFAULT_MONEY_TAB : null };
     if (!data || !data.days.length) {
-      ctx.fillStyle = axisColor;
+      ctx.font = `12px ${fontFamily}`;
+      ctx.fillStyle = mutedColor;
       ctx.textAlign = "center";
       ctx.fillText(state.loading ? "Loading selected range…" : "No data for this range", rect.width / 2, rect.height / 2);
       return;
     }
 
-    const values = chartValues(series, data);
+    // Margin keeps its gaps: a period without revenue has no margin.
+    const ratio = moneyTab?.kind === "ratio";
+    const values = ratio
+      ? AAPR.moneyValues(data, "margin").map((value) => [value])
+      : chartValues(series, data);
     const partial = data.days.map((period) => isPartialPeriod(period, data.grouping));
     const stackedBars = (definition.key === "money" || definition.key === "runs")
       && series.length > 1
       && series.every((item) => item.type === "bar");
-    const valueMaxima = stackedBars
+    const plotted = (stackedBars
       ? values.map((row) => row.reduce((sum, value) => sum + value, 0))
-      : values.flat();
-    const scale = AAPR.niceScale(Math.max(0, ...valueMaxima));
+      : values.flat()).filter((value) => value != null && Number.isFinite(value));
+    // Margin's reference is the range's overall margin; costs' and profit's
+    // is their average per period. All stay inside the scale.
+    const reference = moneyReference(moneyTab, data, values, partial);
+    if (reference) plotted.push(reference.value);
+    // Margin zooms to its own range so a dip from 90% to 70% is visible;
+    // bars always start at zero so their heights stay comparable. A day
+    // with almost no revenue can reach -400%; the axis stops at -100% and
+    // such a point sits on the floor, labelled with its real value.
+    const scale = ratio
+      ? AAPR.niceFitScale(Math.max(MARGIN_FLOOR, Math.min(...plotted)), Math.max(...plotted))
+      : AAPR.niceSignedScale(moneyTab ? Math.min(0, ...plotted) : 0, Math.max(0, ...plotted));
+    const minValue = scale.min;
     const maxValue = scale.max;
-    const top = showLegend && series.length > 1 ? 34 : 16;
+    const insights = definition.key === "money" ? null : chartInsights(definition, data);
+    const guide = reference || (insights?.average != null && insights.average > 0
+      ? { value: insights.average, label: `avg ${definition.key === "cost" ? formatCostPerThousand(insights.average) : formatWhole(insights.average)}` }
+      : null);
+
+    const top = showLegend && series.length > 1 ? 34 : 20;
     const bottom = 30;
-    const axisLabels = Array.from({ length: scale.ticks + 1 }, (_, tick) => axisValue(scale.step * tick, definition, scale.step));
-    const left = Math.max(58, ...axisLabels.map((label) => Math.ceil(ctx.measureText(label).width) + 16));
-    const right = 16;
+    const axisText = (value) => ratio ? formatMarginAxis(value, scale.step) : axisValue(value, definition, scale.step);
+    const tickValue = (tick) => Math.round((minValue + scale.step * tick) * 1e9) / 1e9;
+    const axisLabels = Array.from({ length: scale.ticks + 1 }, (_, tick) => axisText(tickValue(tick)));
+    const left = Math.max(52, ...axisLabels.map((label) => Math.ceil(ctx.measureText(label).width) + 18));
+    // The reference value sits in its own gutter, clear of the bars.
+    ctx.font = `500 11px ${fontFamily}`;
+    const guideWidth = guide ? Math.ceil(ctx.measureText(guide.label).width) + 14 : 0;
+    ctx.font = `11px ${fontFamily}`;
+    const right = guide ? guideWidth + 10 : 16;
     const plotWidth = Math.max(1, rect.width - left - right);
     const plotHeight = Math.max(1, rect.height - top - bottom);
     const slot = plotWidth / data.days.length;
-    canvas.__aapRangePlot = { left, right, top, bottom, slot };
+    const yOf = (value) => top + plotHeight * (maxValue - value) / (maxValue - minValue);
+    const baseline = yOf(Math.min(maxValue, Math.max(minValue, 0)));
+    const barWidth = Math.max(2, Math.min(slot * 0.64, 44));
+    canvas.__aapRangePlot = { left, right, top, bottom, slot, barWidth };
 
-    ctx.strokeStyle = gridColor;
+    // Quiet grid: hairlines, with zero (or the floor) a little stronger.
     ctx.lineWidth = 1;
     for (let tick = 0; tick <= scale.ticks; tick++) {
-      const value = Math.min(maxValue, scale.step * tick);
-      const fraction = value / maxValue;
-      const y = top + plotHeight * (1 - fraction);
+      const value = tickValue(tick);
+      const y = Math.round(yOf(value)) + 0.5;
+      ctx.save();
+      ctx.strokeStyle = value === 0 && minValue < 0 ? mutedColor : gridColor;
+      ctx.globalAlpha = value === 0 && minValue < 0 ? 0.5 : tick === 0 ? 1 : 0.6;
       ctx.beginPath();
       ctx.moveTo(left, y);
       ctx.lineTo(rect.width - right, y);
       ctx.stroke();
-      ctx.fillStyle = axisColor;
+      ctx.restore();
+      ctx.fillStyle = mutedColor;
       ctx.textAlign = "right";
-      ctx.fillText(axisValue(value, definition, scale.step), left - 8, y);
+      ctx.fillText(axisText(value), left - 10, y);
     }
 
     const labelEvery = Math.max(1, Math.ceil(data.days.length / 8));
     ctx.textAlign = "center";
     ctx.textBaseline = "top";
+    ctx.fillStyle = mutedColor;
     for (let index = 0; index < data.days.length; index += labelEvery) {
       const x = left + index * slot + slot / 2;
-      ctx.fillStyle = axisColor;
-      ctx.fillText(AAPR.formatDate(data.days[index], { month: "short", day: "numeric" }), x, rect.height - bottom + 8);
+      ctx.fillText(AAPR.formatDate(data.days[index], { month: "short", day: "numeric" }), x, rect.height - bottom + 9);
     }
+    ctx.textBaseline = "middle";
 
-    const coloredMoneyBars = definition.key === "money" && data.actorDetails?.size;
+    const xOf = (index) => left + index * slot + slot / 2;
+    // One bar per period, its segments bottom to top. A stack is clipped to
+    // one rounded bar with hairline gaps between segments; an in-progress
+    // period is faded with a dashed outline so it is not read as a drop.
+    const drawStack = (index, segments) => {
+      const total = segments.reduce((sum, segment) => sum + segment.value, 0);
+      if (!total) return;
+      const x = xOf(index);
+      const to = yOf(total);
+      ctx.save();
+      ctx.globalAlpha = partial[index] ? 0.35 : 1;
+      barPath(ctx, x, baseline, to, barWidth);
+      if (segments.length === 1) {
+        ctx.fillStyle = segments[0].color;
+        ctx.fill();
+      } else {
+        ctx.clip();
+        let below = 0;
+        for (const segment of segments) {
+          const from = yOf(below);
+          const end = yOf(below + segment.value);
+          ctx.fillStyle = segment.color;
+          ctx.fillRect(x - barWidth / 2, Math.min(from, end), barWidth, Math.abs(end - from));
+          below += segment.value;
+        }
+        if (barWidth >= 6) {
+          ctx.fillStyle = surfaceColor;
+          below = 0;
+          for (const segment of segments.slice(0, -1)) {
+            below += segment.value;
+            if (Math.abs(yOf(below) - to) > 2) ctx.fillRect(x - barWidth / 2, yOf(below) - 0.5, barWidth, 1);
+          }
+        }
+      }
+      ctx.restore();
+      if (partial[index]) {
+        ctx.save();
+        ctx.setLineDash([3, 3]);
+        ctx.strokeStyle = segments[segments.length - 1].color;
+        ctx.globalAlpha = 0.85;
+        barPath(ctx, x, baseline, to, barWidth - 1);
+        ctx.stroke();
+        ctx.restore();
+      }
+    };
+
+    const coloredMoneyBars = moneyTab?.kind === "actors" && data.actorDetails?.size;
     if (coloredMoneyBars) {
+      // Revenue is stacked by Actor in the Actors' ranking colors.
+      const metric = moneyTab.metric;
       const detailEntries = [...data.actorDetails.values()];
       const revenueRanking = actorRevenueRanking(data);
       for (let index = 0; index < data.days.length; index++) {
         const period = data.days[index];
         const row = data.daily[period] || {};
-        const actorRows = AAPR.actorRowsForDays(detailEntries, row.sourceDays || [period])
-          .filter((actor) => Number(actor.revenue) > 0);
-        const segments = actorRows.map((actor) => ({
-          color: actorColor(actor.actorId, revenueRanking),
-          value: Number(actor.revenue) || 0,
-        }));
+        const segments = AAPR.actorRowsForDays(detailEntries, row.sourceDays || [period])
+          .filter((actor) => Number(actor[metric]) > 0)
+          .map((actor) => ({ color: actorColor(actor.actorId, revenueRanking), value: Number(actor[metric]) || 0 }));
         const accounted = segments.reduce((sum, segment) => sum + segment.value, 0);
-        const total = Number(row.revenue) || 0;
+        const total = Number(row[metric]) || 0;
         if (segments.length && total > accounted) segments.push({ color: MUTED_ACTOR_COLOR, value: total - accounted });
         if (!segments.length) segments.push({ color: series[0].color, value: total });
-        const drawnTotal = Math.max(total, segments.reduce((sum, segment) => sum + segment.value, 0));
-        const barHeight = (drawnTotal / maxValue) * plotHeight;
-        const x = left + index * slot + slot / 2;
-        const barWidth = Math.max(3, slot * 0.62);
-        let offset = 0;
-        ctx.globalAlpha = partial[index] ? 0.4 : 1;
-        for (const segment of segments) {
-          const height = (segment.value / maxValue) * plotHeight;
-          const y = top + plotHeight - offset - height;
-          ctx.fillStyle = segment.color;
-          ctx.fillRect(x - barWidth / 2, y, barWidth, height);
-          offset += height;
-        }
-        // Keep the bar's baseline deterministic for zero-revenue periods.
-        if (!drawnTotal) ctx.fillRect(x - barWidth / 2, top + plotHeight, barWidth, 0);
+        drawStack(index, segments);
       }
-      ctx.globalAlpha = 1;
     } else {
-      for (let seriesIndex = 0; seriesIndex < series.length; seriesIndex++) {
-        const current = series[seriesIndex];
-        const points = values.map((row, index) => ({
-          x: left + index * slot + slot / 2,
-          y: top + plotHeight - (row[seriesIndex] / maxValue) * plotHeight,
-        }));
-        if (current.type === "bar" || definition.type === "bar") {
-          ctx.fillStyle = current.color;
-          for (let index = 0; index < points.length; index++) {
-            const value = values[index][seriesIndex];
-            const below = stackedBars
-              ? values[index].slice(0, seriesIndex).reduce((sum, item) => sum + item, 0)
-              : 0;
-            const height = (value / maxValue) * plotHeight;
-            const y = top + plotHeight - ((below + value) / maxValue) * plotHeight;
-            ctx.globalAlpha = partial[index] ? 0.4 : 1;
-            ctx.fillRect(points[index].x - Math.max(3, slot * 0.62) / 2, y, Math.max(3, slot * 0.62), height);
+      const barSeries = series.map((item, seriesIndex) => ({ item, seriesIndex }))
+        .filter(({ item }) => item.type === "bar" || (definition.type === "bar" && item.type !== "line"));
+      for (let index = 0; index < data.days.length && barSeries.length; index++) {
+        const segments = barSeries
+          .map(({ item, seriesIndex }) => {
+            const value = values[index][seriesIndex] || 0;
+            return { value, color: item.signed && value < 0 ? colors.negative : item.color };
+          })
+          .filter((segment) => segment.value);
+        if (stackedBars) drawStack(index, segments);
+        else segments.forEach((segment) => drawStack(index, [segment]));
+      }
+
+      const lineSeries = series.map((item, seriesIndex) => ({ item, seriesIndex }))
+        .filter(({ item }) => !barSeries.some((bar) => bar.item === item));
+      for (const { item: current, seriesIndex } of lineSeries) {
+        const points = values.map((row, index) => row[seriesIndex] == null
+          ? null
+          : ({ x: xOf(index), y: yOf(Math.min(maxValue, Math.max(minValue, row[seriesIndex]))), index }));
+        // A gap (null) breaks the line instead of dropping it to zero; the
+        // in-progress period is dashed.
+        const runs = [];
+        let run = [];
+        points.forEach((point) => {
+          if (point) run.push(point);
+          else if (run.length) runs.push(run.splice(0));
+        });
+        if (run.length) runs.push(run);
+        const solidEnd = partial.lastIndexOf(false);
+        // A single line gets a soft fill below it.
+        if (lineSeries.length === 1 && series.length === 1) {
+          const gradient = ctx.createLinearGradient?.(0, top, 0, top + plotHeight);
+          for (const part of runs.filter((items) => items.length > 1)) {
+            ctx.save();
+            if (gradient?.addColorStop && colorAlpha(current.color, 1) !== current.color) {
+              gradient.addColorStop(0, colorAlpha(current.color, 0.22));
+              gradient.addColorStop(1, colorAlpha(current.color, 0));
+              ctx.fillStyle = gradient;
+            } else {
+              ctx.globalAlpha = 0.1;
+              ctx.fillStyle = current.color;
+            }
+            ctx.beginPath();
+            traceCurve(ctx, part);
+            ctx.lineTo(part[part.length - 1].x, top + plotHeight);
+            ctx.lineTo(part[0].x, top + plotHeight);
+            ctx.closePath();
+            ctx.fill();
+            ctx.restore();
           }
-          ctx.globalAlpha = 1;
-        } else {
-          ctx.strokeStyle = current.color;
-          ctx.fillStyle = current.color;
-          ctx.lineWidth = 2;
-          // Solid line through complete periods; the in-progress period is
-          // dashed so a partial day is not read as a drop.
-          const solidEnd = partial.lastIndexOf(false);
-          ctx.beginPath();
-          points.slice(0, solidEnd + 1).forEach((point, index) => index ? ctx.lineTo(point.x, point.y) : ctx.moveTo(point.x, point.y));
-          ctx.stroke();
-          if (solidEnd >= 0 && solidEnd < points.length - 1) {
+        }
+        ctx.save();
+        ctx.strokeStyle = current.color;
+        ctx.lineWidth = 2;
+        ctx.lineJoin = "round";
+        ctx.lineCap = "round";
+        for (const part of runs) {
+          const solid = part.filter((point) => point.index <= solidEnd);
+          const dashed = part.filter((point) => point.index >= solidEnd);
+          if (solid.length > 1) {
+            ctx.beginPath();
+            traceCurve(ctx, solid);
+            ctx.stroke();
+          }
+          if (dashed.length > 1 && dashed.some((point) => partial[point.index])) {
             ctx.save();
             ctx.setLineDash([4, 4]);
             ctx.globalAlpha = 0.6;
             ctx.beginPath();
-            ctx.moveTo(points[solidEnd].x, points[solidEnd].y);
-            points.slice(solidEnd + 1).forEach((point) => ctx.lineTo(point.x, point.y));
+            traceCurve(ctx, dashed);
             ctx.stroke();
             ctx.restore();
           }
-          if (points.length <= 90) {
-            points.forEach((point, index) => {
-              ctx.beginPath();
-              ctx.arc(point.x, point.y, 2.5, 0, Math.PI * 2);
-              if (partial[index]) {
-                ctx.save();
-                ctx.lineWidth = 1.5;
-                ctx.stroke();
-                ctx.restore();
-              } else {
-                ctx.fill();
-              }
-            });
+        }
+        ctx.restore();
+        // Points only while they stay readable; ringed in the surface color.
+        if (points.length <= 62) {
+          points.forEach((point, index) => {
+            if (!point) return;
+            const negative = moneyTab && values[index][seriesIndex] < 0;
+            ctx.beginPath();
+            ctx.arc(point.x, point.y, 3, 0, Math.PI * 2);
+            ctx.fillStyle = partial[index] ? surfaceColor : negative ? colors.negative : current.color;
+            ctx.strokeStyle = partial[index] ? current.color : surfaceColor;
+            ctx.lineWidth = 1.5;
+            ctx.fill();
+            ctx.stroke();
+          });
+        }
+        // Margin: mark the weakest complete period, the one worth a look.
+        if (ratio) {
+          const complete = points.filter((point) => point && !partial[point.index]);
+          const low = complete.reduce((lowest, point) => !lowest || values[point.index][0] < values[lowest.index][0] ? point : lowest, null);
+          if (low && complete.length >= 3) {
+            const value = values[low.index][0];
+            ctx.beginPath();
+            ctx.arc(low.x, low.y, 4.5, 0, Math.PI * 2);
+            ctx.fillStyle = value < 0 ? colors.negative : current.color;
+            ctx.strokeStyle = surfaceColor;
+            ctx.lineWidth = 2;
+            ctx.fill();
+            ctx.stroke();
+            const label = `Low ${AAPF.pct(value)} · ${AAPR.formatDate(data.days[low.index], { month: "short", day: "numeric" })}`;
+            ctx.font = `600 11px ${fontFamily}`;
+            const width = ctx.measureText(label).width;
+            const x = Math.min(rect.width - right - width / 2 - 4, Math.max(left + width / 2 + 4, low.x));
+            const below = low.y + 22 <= top + plotHeight;
+            const textY = below ? low.y + 9 : low.y - 9;
+            // A chip in the surface color keeps the label legible over the line.
+            ctx.fillStyle = surfaceColor;
+            ctx.globalAlpha = 0.9;
+            ctx.beginPath();
+            const chipY = below ? textY - 2 : textY - 15;
+            if (typeof ctx.roundRect === "function") ctx.roundRect(x - width / 2 - 5, chipY, width + 10, 17, 4);
+            else ctx.rect(x - width / 2 - 5, chipY, width + 10, 17);
+            ctx.fill();
+            ctx.globalAlpha = 1;
+            ctx.fillStyle = axisColor;
+            ctx.textAlign = "center";
+            ctx.textBaseline = below ? "top" : "bottom";
+            ctx.fillText(label, x, textY);
+            ctx.font = `11px ${fontFamily}`;
+            ctx.textBaseline = "middle";
           }
         }
       }
     }
-    const insights = definition.key === "money" ? null : chartInsights(definition, data);
-    if (insights?.average != null && insights.average > 0 && insights.average <= maxValue) {
-      const y = top + plotHeight * (1 - insights.average / maxValue);
+
+    if (guide && guide.value >= minValue && guide.value <= maxValue) {
+      const y = Math.round(yOf(guide.value)) + 0.5;
       ctx.save();
-      ctx.strokeStyle = axisColor;
-      ctx.globalAlpha = 0.7;
-      ctx.setLineDash([5, 4]);
+      ctx.strokeStyle = mutedColor;
+      ctx.globalAlpha = 0.75;
+      ctx.setLineDash([4, 4]);
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.moveTo(left, y);
-      ctx.lineTo(rect.width - right, y);
+      ctx.lineTo(rect.width - right + 4, y);
       ctx.stroke();
       ctx.setLineDash([]);
       ctx.globalAlpha = 1;
-      const label = `avg ${definition.key === "cost" ? formatCostPerThousand(insights.average) : formatWhole(insights.average)}`;
-      ctx.font = `11px ${getComputedStyle(host).fontFamily || "sans-serif"}`;
-      const width = ctx.measureText(label).width + 10;
-      const labelX = rect.width - right - width;
-      ctx.fillStyle = chartStyles.getPropertyValue("--aap-range-chart-surface").trim() || "#ffffff";
-      ctx.fillRect(labelX, y - 9, width, 18);
+      // A pill in the right gutter, level with the line.
+      const pillX = rect.width - right + 6;
+      const pillY = Math.min(rect.height - bottom - 10, Math.max(top - 10, y - 10));
+      ctx.fillStyle = chipColor;
+      ctx.beginPath();
+      if (typeof ctx.roundRect === "function") ctx.roundRect(pillX, pillY, guideWidth, 20, 10);
+      else ctx.rect(pillX, pillY, guideWidth, 20);
+      ctx.fill();
+      ctx.font = `500 11px ${fontFamily}`;
       ctx.fillStyle = axisColor;
       ctx.textAlign = "left";
       ctx.textBaseline = "middle";
-      ctx.fillText(label, labelX + 5, y);
+      ctx.fillText(guide.label, pillX + 7, pillY + 10);
       ctx.restore();
     }
     if (insights?.spike) {
       // Annotate an outlier so it reads as an event, not just a tall bar.
       const index = data.days.indexOf(insights.spike.period);
       if (index >= 0) {
-        const x = left + index * slot + slot / 2;
-        const y = top + plotHeight * (1 - insights.spike.value / maxValue);
+        const x = xOf(index);
+        const y = yOf(insights.spike.value);
         const label = `${formatWhole(insights.spike.value)} · spike`;
         ctx.save();
-        ctx.font = `600 11px ${getComputedStyle(host).fontFamily || "sans-serif"}`;
+        ctx.font = `600 11px ${fontFamily}`;
         ctx.fillStyle = axisColor;
         ctx.textAlign = x > rect.width - right - 60 ? "right" : x < left + 60 ? "left" : "center";
         ctx.textBaseline = "bottom";
@@ -1495,6 +1758,32 @@
       }
     }
     setRangeChartReady(chart, true);
+  }
+
+  // A soft column behind the hovered or pinned period.
+  function showHoverBand(canvas, index) {
+    const plot = canvas.__aapRangePlot;
+    const overlay = canvas.parentElement;
+    if (!plot || !overlay) return;
+    let band = overlay.querySelector(".aap-range-hover-band");
+    if (!band) {
+      band = createElement("div", "aap-range-hover-band");
+      overlay.insertBefore(band, canvas);
+    }
+    const width = Math.min(plot.slot, plot.barWidth + 14);
+    const height = canvas.getBoundingClientRect().height - plot.top - plot.bottom;
+    band.style.width = `${width}px`;
+    band.style.height = `${Math.max(0, height + 8)}px`;
+    band.style.top = `${plot.top - 4}px`;
+    band.style.transform = `translateX(${plot.left + plot.slot * index + (plot.slot - width) / 2}px)`;
+    band.classList.add("is-visible");
+  }
+
+  function hideHoverBand(canvas = null) {
+    const bands = canvas
+      ? [canvas.parentElement?.querySelector(".aap-range-hover-band")]
+      : document.querySelectorAll(".aap-range-hover-band.is-visible");
+    for (const band of bands) band?.classList.remove("is-visible");
   }
 
   function renderRangeView(forceDraw = true) {
@@ -1512,9 +1801,10 @@
       }
       if (!chart) continue;
       try {
-        const needsDraw = forceDraw || chart.canvas.__aapRange?.data !== state.data;
+        const tab = definition.key === "money" ? activeMoneyTab(wrapper) : null;
+        const needsDraw = forceDraw || chart.canvas.__aapRange?.data !== state.data || chart.canvas.__aapRange?.tab !== tab;
         if (needsDraw && chart.canvas.__aapRange?.data !== state.data) restoreOriginalText(wrapper);
-        if (needsDraw) drawRangeChart(chart, definition, state.data);
+        if (needsDraw) drawRangeChart(chart, definition, state.data, tab);
         // Do not overwrite native labels or summaries until the replacement
         // is ready. That keeps the fallback internally consistent if drawing
         // fails halfway through a React update or a canvas context loss.
@@ -1585,7 +1875,8 @@
     return canvas?.__aapRange?.definition?.key || "";
   }
 
-  function defaultTooltipSort(chartKey) {
+  function defaultTooltipSort(chartKey, canvas = null) {
+    if (chartKey === "money") return MONEY_TABS[canvas?.__aapRange?.tab]?.sort || "revenue";
     return chartKey === "runs" ? "failed" : chartKey === "users" ? "users" : "revenue";
   }
 
@@ -1607,10 +1898,13 @@
     const period = canvas.__aapRange?.data?.days?.[index] || null;
     const chartKey = chartKeyOf(canvas);
     const sessionKey = `${dataKey() || ""}|${chartKey}|${period || ""}`;
-    if (period !== rangeTooltipState.period || chartKey !== chartKeyOf(rangeTooltipState.canvas)) {
-      rangeTooltipState.sort = defaultTooltipSort(chartKey);
+    // A Monetization tab switch also resets the sort to that tab's metric.
+    const tab = canvas.__aapRange?.tab || null;
+    if (period !== rangeTooltipState.period || chartKey !== chartKeyOf(rangeTooltipState.canvas) || tab !== rangeTooltipState.tab) {
+      rangeTooltipState.sort = defaultTooltipSort(chartKey, canvas);
       rangeTooltipState.direction = "desc";
       rangeTooltipState.period = period;
+      rangeTooltipState.tab = tab;
     }
     if (rangeTooltipState.session?.key !== sessionKey) rangeTooltipState.session = null;
     rangeTooltipState.canvas = canvas;
@@ -1863,6 +2157,7 @@
       const summary = createElement("div", "aap-range-tooltip-summary");
       const summaryFields = [
         ["revenue", "Overall revenue", (value) => AAPF.money(value ?? 0)],
+        ["cost", "Overall costs", (value) => AAPF.money(value ?? 0)],
         ["profit", "Overall profit", (value) => AAPF.money(value ?? 0)],
         ["margin", "Overall margin", (value) => value == null ? "–" : AAPF.pct(value)],
       ];
@@ -1930,6 +2225,7 @@
     if (!target) return hideRangeTooltip();
     const { canvas, index } = target;
     setRangeTooltipTarget(canvas, index);
+    showHoverBand(canvas, index);
     rangeTooltipState.x = event.clientX;
     rangeTooltipState.y = event.clientY;
     if (!renderRangeTooltip(canvas, index)) return hideRangeTooltip();
@@ -1945,6 +2241,7 @@
     }
     rangeTooltipState.pinned = true;
     setRangeTooltipTarget(target.canvas, target.index);
+    showHoverBand(target.canvas, target.index);
     rangeTooltipState.x = event.clientX;
     rangeTooltipState.y = event.clientY;
     if (!renderRangeTooltip(target.canvas, target.index)) return hideRangeTooltip();
@@ -1973,12 +2270,14 @@
   }
 
   function hideRangeTooltip() {
+    hideHoverBand();
     if (rangeTooltip) {
       rangeTooltip.style.display = "none";
       rangeTooltip.classList.remove("aap-range-tooltip-pinned");
     }
     rangeTooltipState = {
       period: null,
+      tab: null,
       sort: "revenue",
       direction: "desc",
       pinned: false,
@@ -2200,6 +2499,16 @@
   window.addEventListener("resize", () => {
     if (state.view === "custom" && validRange(state.range)) renderRangeView();
   });
+
+  // A Monetization tab switch redraws as soon as Apify has swapped its chart,
+  // instead of waiting for the next poll.
+  document.addEventListener("click", (event) => {
+    if (!event.target.closest?.(Object.keys(MONEY_TABS).map((id) => `a#${id}`).join(","))) return;
+    if (rangeTooltipState.pinned) hideRangeTooltip();
+    setTimeout(() => {
+      if (onInsightsRoute() && state.view === "custom" && validRange(state.range)) renderRangeView(false);
+    }, 0);
+  }, true);
 
   const poll = setInterval(() => {
     const themeChanged = syncPageTheme();

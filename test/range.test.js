@@ -190,4 +190,45 @@ assert.equal(context.self.AAPR.isTruncatedBucket("2026-01-01", "month", "2026-01
 assert.equal(context.self.AAPR.isTruncatedBucket("2026-02-01", "month", "2026-01-15", "2026-03-31"), false, "full month");
 assert.equal(context.self.AAPR.isTruncatedBucket("2026-03-01", "month", "2026-01-15", "2026-03-20"), true, "month cut by the range end");
 assert.equal(context.self.AAPR.isTruncatedBucket("2026-01-01", "day", "2026-01-15", "2026-03-20"), false, "days are never truncated");
+// Profit and margin can fall below zero: the scale reaches down on whole
+// steps and keeps zero as a tick.
+{
+  const AAPR = context.self.AAPR;
+  const signed = AAPR.niceSignedScale(-12.4, 64);
+  assert.equal(signed.min, -20);
+  assert.equal(signed.max, 70);
+  assert.equal(signed.step, 10);
+  assert.equal(signed.ticks, 9);
+  assert.equal(Math.abs(signed.min % signed.step), 0, "zero is a tick");
+  const positive = AAPR.niceSignedScale(0, 55);
+  assert.equal(`${positive.min}|${positive.max}|${positive.step}|${positive.ticks}`, "0|60|10|6", "no negatives: same as niceScale");
+  const margin = AAPR.niceSignedScale(-0.35, 0.92);
+  assert.equal(`${margin.min}|${margin.max}|${margin.step}`, "-0.4|1|0.2", "no floating-point residue");
+  const allLoss = AAPR.niceSignedScale(-3, -1);
+  assert.equal(allLoss.max, 0, "an all-loss range still shows zero");
+
+  // Margin's line zooms to its data in a few round steps.
+  const fitted = AAPR.niceFitScale(0.67, 0.96);
+  assert.equal(`${fitted.min}|${fitted.max}|${fitted.step}|${fitted.ticks}`, "0.6|1|0.1|4");
+  const flat = AAPR.niceFitScale(0.888, 0.888);
+  assert.ok(flat.min < 0.888 && flat.max > 0.888 && flat.ticks <= 5, "a flat line still gets room");
+  const crossing = AAPR.niceFitScale(-0.2, 0.9);
+  assert.ok(crossing.min <= -0.2 && crossing.max >= 0.9 && crossing.ticks <= 5);
+  assert.equal(Math.abs(Math.round(crossing.min / crossing.step) * crossing.step - crossing.min) < 1e-9, true, "ticks on whole steps");
+
+  // Margin has no value without revenue; other metrics read 0.
+  const data = {
+    days: ["2026-10-01", "2026-10-02", "2026-10-03"],
+    daily: {
+      "2026-10-01": { revenue: 10, cost: 2, profit: 8, margin: 0.8 },
+      "2026-10-02": { revenue: 0, cost: 1, profit: -1, margin: null },
+      "2026-10-03": { revenue: 4, cost: 5, profit: -1, margin: -0.25 },
+    },
+  };
+  assert.equal(AAPR.moneyValues(data, "margin").join(), "0.8,,-0.25");
+  assert.equal(AAPR.moneyValues(data, "margin")[1], null);
+  assert.equal(AAPR.moneyValues(data, "profit").join(), "8,-1,-1");
+  assert.equal(AAPR.moneyValues(data, "cost").join(), "2,1,5");
+  assert.equal(AAPR.moneyValues({ days: ["x"], daily: {} }, "revenue").join(), "0");
+}
 console.log("range aggregation tests passed");

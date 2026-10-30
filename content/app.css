@@ -650,10 +650,37 @@ body,
   display: none !important;
 }
 
+/* Apify's Monetization card pads its sides by 2.4rem, so the tab row (its
+   divider and the active tab's fill) stopped short of both edges. Stretch it
+   edge to edge, with top corners following the card's 8px corner inside
+   its 1px border. */
+.aap-range-mode .Card [role="tablist"]:has(> a#costUsd) {
+  box-sizing: border-box;
+  width: calc(100% + 4.8rem);
+  margin-inline: -2.4rem;
+}
+
+.aap-range-mode .Card [role="tablist"]:has(> a#costUsd) > .Tabs-Large-Item-First {
+  border-top-left-radius: 7px;
+}
+
+.aap-range-mode .Card [role="tablist"]:has(> a#costUsd) > .Tabs-Large-Item-Last {
+  border-top-right-radius: 7px;
+}
+
 .aap-range-chart-overlay {
   --aap-range-chart-surface: var(--aap-page-background, var(--color-neutral-background, #ffffff));
   --aap-range-chart-text: var(--aap-page-text, var(--color-neutral-text, #374151));
   --aap-range-chart-grid: var(--aap-page-grid, var(--color-neutral-separator-subtle, rgba(17, 24, 39, 0.14)));
+  --aap-range-chart-muted: var(--aap-page-muted, var(--color-neutral-text-subtle, rgba(55, 65, 81, 0.75)));
+  --aap-range-chart-chip: var(--aap-page-background-muted, rgba(0, 0, 0, 0.06));
+  --aap-range-chart-hover: color-mix(in srgb, var(--aap-range-chart-text) 6%, transparent);
+  /* Apify's palette: Bamboo earns, Coral spends, Paprika loses, and margin
+     takes the Console accent. */
+  --aap-range-chart-positive: #12976f;
+  --aap-range-chart-cost: #fa8238;
+  --aap-range-chart-negative: #e44466;
+  --aap-range-chart-accent: #246dff;
   position: absolute;
   inset: 0;
   z-index: 2;
@@ -661,10 +688,46 @@ body,
   visibility: hidden;
 }
 
+body.theme-dark .aap-range-chart-overlay {
+  --aap-range-chart-hover: color-mix(in srgb, var(--aap-range-chart-text) 7%, transparent);
+  --aap-range-chart-positive: #439374;
+  --aap-range-chart-cost: #f08847;
+  --aap-range-chart-negative: #e26a7c;
+  --aap-range-chart-accent: #528fff;
+}
+
 .aap-range-chart {
+  position: relative;
   display: block;
   width: 100%;
   height: 100%;
+}
+
+.aap-range-chart-overlay[data-chart="money"] .aap-range-chart,
+.aap-range-chart-overlay[data-chart="runs"] .aap-range-chart,
+.aap-range-chart-overlay[data-chart="users"] .aap-range-chart {
+  cursor: pointer;
+}
+
+/* Sits behind the transparent canvas and glides between periods. */
+.aap-range-hover-band {
+  position: absolute;
+  left: 0;
+  border-radius: 6px;
+  background: var(--aap-range-chart-hover);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease-out, transform 140ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.aap-range-hover-band.is-visible {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aap-range-hover-band {
+    transition: opacity 120ms ease-out;
+  }
 }
 
 .aap-range-legend {
@@ -904,7 +967,7 @@ body,
 
 .aap-range-tooltip-summary {
   display: grid;
-  grid-template-columns: repeat(3, minmax(96px, 1fr));
+  grid-template-columns: repeat(4, minmax(72px, 1fr));
   gap: 12px;
   margin: 0 0 10px;
   padding: 0 0 10px;
@@ -1118,62 +1181,167 @@ body,
   border-bottom: 1px solid var(--aap-separator);
 }
 
+/* Group is a segmented control (exactly one applies); actions are toggle
+   chips that narrow it further. Both share one line and wrap when narrow. */
+.aap-portfolio-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 20px;
+  margin-bottom: 16px;
+}
+
+.aap-portfolio-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.aap-portfolio-filter-label {
+  color: var(--aap-text-subtle);
+  font-size: var(--aap-font-sm);
+  white-space: nowrap;
+}
+
 .aap-portfolio-tabs {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 6px;
 }
 
 .aap-portfolio-tab {
+  --aap-chip-tone: var(--aap-accent);
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 30px;
+  height: 28px;
+  box-sizing: border-box;
   padding: 0 10px;
-  border: 1px solid var(--aap-border);
+  border: 1px solid var(--aap-separator);
   border-radius: 999px;
   color: var(--aap-text-muted);
   background: transparent;
   font: inherit;
   font-size: var(--aap-font-sm);
   font-weight: 500;
+  white-space: nowrap;
   cursor: pointer;
-  transition: background-color 140ms ease, color 140ms ease, border-color 140ms ease;
+  transition: background-color 140ms ease, color 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
 }
 
 .aap-portfolio-tab:hover {
+  border-color: var(--aap-border);
   color: var(--aap-text);
   background: var(--aap-hover);
 }
 
+.aap-portfolio-tab:has(.aap-portfolio-tab-dot-bad) { --aap-chip-tone: var(--aap-danger); }
+.aap-portfolio-tab:has(.aap-portfolio-tab-dot-warning) { --aap-chip-tone: var(--aap-warning); }
+.aap-portfolio-tab:has(.aap-portfolio-tab-dot-good) { --aap-chip-tone: var(--aap-success); }
+
 .aap-portfolio-tab[aria-pressed="true"] {
-  border-color: transparent;
-  color: var(--aap-accent-soft-text);
-  background: var(--aap-accent-soft);
+  border-color: color-mix(in srgb, var(--aap-chip-tone) 55%, transparent);
+  color: var(--aap-text);
+  background: color-mix(in srgb, var(--aap-chip-tone) 12%, transparent);
 }
 
 .aap-portfolio-tab-count {
-  min-width: 18px;
-  padding: 0 5px;
-  border-radius: 999px;
   color: var(--aap-text-subtle);
-  background: var(--aap-bg-muted);
   font-size: var(--aap-font-xs);
-  line-height: 18px;
-  text-align: center;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
 }
 
 .aap-portfolio-tab[aria-pressed="true"] .aap-portfolio-tab-count {
-  color: inherit;
-  background: color-mix(in srgb, var(--aap-accent) 18%, transparent);
+  color: var(--aap-text-muted);
+}
+
+/* The group control: one track, the chosen group raised on it. */
+.aap-portfolio-segmented .aap-portfolio-tabs {
+  flex-wrap: nowrap;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--aap-separator);
+  border-radius: var(--aap-radius-lg);
+  background: var(--aap-bg-subtle);
+}
+
+.aap-portfolio-segmented .aap-portfolio-tab {
+  height: 28px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--aap-radius);
+}
+
+.aap-portfolio-segmented .aap-portfolio-tab:hover {
+  background: color-mix(in srgb, var(--aap-card) 60%, transparent);
+}
+
+.aap-portfolio-segmented .aap-portfolio-tab[aria-pressed="true"] {
+  color: var(--aap-text);
+  background: var(--aap-card);
+  box-shadow: 0 0 0 1px var(--aap-border), 0 1px 2px rgb(0 0 0 / 0.12);
+}
+
+/* The card is darker than the track in dark mode; lift the chosen group. */
+body.theme-dark .aap-portfolio-segmented .aap-portfolio-tab[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--aap-text) 12%, var(--aap-card));
 }
 
 .aap-portfolio-tab-empty {
-  opacity: 0.6;
+  opacity: 0.55;
+}
+
+.aap-portfolio-tab:disabled {
+  cursor: progress;
+  opacity: 0.7;
+}
+
+.aap-portfolio-tab:focus-visible {
+  outline: 2px solid var(--aap-accent);
+  outline-offset: 2px;
+}
+
+.aap-portfolio-filter-sep {
+  align-self: center;
+  width: 1px;
+  height: 16px;
+  margin: 0 2px;
+  background: var(--aap-separator);
+}
+
+/* Each action's tone, the same one its tags use. */
+.aap-portfolio-tab-dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 6px;
+  border-radius: 50%;
+  background: var(--aap-text-subtle);
+}
+
+.aap-portfolio-tab-dot-bad { background: var(--aap-danger); }
+.aap-portfolio-tab-dot-warning { background: var(--aap-warning); }
+.aap-portfolio-tab-dot-good { background: var(--aap-success); }
+.aap-portfolio-tab-dot-accent { background: var(--aap-accent); }
+
+@media (max-width: 720px) {
+  .aap-portfolio-filter-row {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 6px;
+    max-width: 100%;
+  }
+
+  .aap-portfolio-segmented .aap-portfolio-tabs {
+    max-width: 100%;
+    overflow-x: auto;
+  }
 }
 
 .aap-portfolio-segment-note {
-  margin: 10px 0 12px;
+  margin: -6px 0 14px;
   color: var(--aap-text-subtle);
   font-size: var(--aap-font-sm);
   line-height: 18px;
@@ -1306,11 +1474,14 @@ th[aria-sort="descending"] .aap-portfolio-sort {
   font-size: var(--aap-font-xs);
 }
 
+/* One line under the name: outlined action tags with a tone dot, then
+   context as plain text. Quiet enough to scan 25 rows. */
 .aap-portfolio-signals {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
-  margin: 6px 0 0 42px;
+  align-items: center;
+  gap: 6px 8px;
+  margin: 8px 0 0 42px;
 }
 
 .aap-portfolio-signal {
@@ -1340,6 +1511,71 @@ th[aria-sort="descending"] .aap-portfolio-sort {
 .aap-portfolio-signal-neutral {
   color: var(--aap-text-subtle);
   background: var(--aap-bg-subtle);
+}
+
+.aap-portfolio .aap-portfolio-signal {
+  --aap-signal-tone: var(--aap-text-subtle);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  box-sizing: border-box;
+  padding: 0 9px 0 8px;
+  border: 1px solid var(--aap-separator);
+  border-radius: 999px;
+  color: var(--aap-text-muted);
+  background: transparent;
+  font-size: var(--aap-font-xs);
+  font-weight: 400;
+  line-height: 20px;
+  cursor: help;
+}
+
+.aap-portfolio .aap-portfolio-signal::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  flex: 0 0 6px;
+  border-radius: 50%;
+  background: var(--aap-signal-tone);
+}
+
+.aap-portfolio .aap-portfolio-signal strong {
+  color: var(--aap-text);
+  font-weight: 500;
+}
+
+.aap-portfolio .aap-portfolio-signal-good { --aap-signal-tone: var(--aap-success); }
+.aap-portfolio .aap-portfolio-signal-bad { --aap-signal-tone: var(--aap-danger); }
+.aap-portfolio .aap-portfolio-signal-warning { --aap-signal-tone: var(--aap-warning); }
+
+.aap-portfolio-signal-notes {
+  color: var(--aap-text-subtle);
+  font-size: var(--aap-font-xs);
+  line-height: 22px;
+}
+
+.aap-portfolio-note-bad { color: var(--aap-danger); }
+.aap-portfolio-note-warning { color: var(--aap-warning); }
+
+/* "Since Oct 29: moved from Core earners, now Fix reliability". */
+.aap-portfolio-change {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0 0 42px;
+  color: var(--aap-text-muted);
+  font-size: var(--aap-font-xs);
+  line-height: 16px;
+}
+
+.aap-portfolio-change::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  flex: 0 0 6px;
+  border-radius: 50%;
+  background: var(--aap-accent);
 }
 
 .aap-portfolio-value {
