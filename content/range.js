@@ -48,8 +48,10 @@
       key: "users",
       heading: "User statistics",
       series: [
-        { key: "payingUsers", label: "Paying users", color: "#2dd4bf" },
-        { key: "freeUsers", label: "Free users", color: "#60a5fa" },
+        // Paying users take Bamboo, the color revenue wears; free users take
+        // the Console accent. Each resolves per theme from the chart tokens.
+        { key: "payingUsers", label: "Paying users", color: "#12976f", token: "--aap-range-chart-paying", fill: true },
+        { key: "freeUsers", label: "Free users", color: "#246dff", token: "--aap-range-chart-free" },
       ],
     },
   ];
@@ -118,17 +120,27 @@
   // A stale cached response was refreshed in the background: reload the range
   // (now served from the fresh cache) so the charts show the new numbers.
   let revalidationTimer = null;
+  let revalidationPending = false;
   AAP_API.onRevalidated?.(({ path }) => {
     if (!path || path === "public" || state.view !== "custom") return;
     clearTimeout(revalidationTimer);
-    revalidationTimer = setTimeout(() => {
-      const key = dataKey();
-      if (!key || state.loading || state.refreshing) return;
-      // Refresh in place: the chart and its loaded Actor colors stay visible.
-      memoryCache.delete(key);
-      if (canLoad()) loadRange();
-    }, 800);
+    revalidationTimer = setTimeout(reloadRevalidated, 800);
   });
+
+  function reloadRevalidated() {
+    const key = dataKey();
+    if (!key) return;
+    // A load in flight may already have read the older copy: reload once it
+    // ends rather than dropping the newer numbers until the cache expires.
+    if (state.loading || state.refreshing) {
+      revalidationPending = true;
+      return;
+    }
+    revalidationPending = false;
+    // Refresh in place: the chart and its loaded Actor colors stay visible.
+    memoryCache.delete(key);
+    if (canLoad()) loadRange();
+  }
   chrome.storage.onChanged?.addListener((changes, area) => {
     if (area !== "local") return;
     if (changes[CACHE_CLEAR_KEY]) {
@@ -223,7 +235,7 @@
     if (!validRange(range)) return "Custom month range";
     const start = monthLabel(range.start);
     const end = monthLabel(range.end);
-    return `${start} – ${end}`;
+    return start === end ? start : `${start} – ${end}`;
   }
 
   function groupingLabel(grouping = state.grouping) {
@@ -790,7 +802,9 @@
       cost: `${grouping[0].toUpperCase()}${grouping.slice(1)} cost per 1,000 results for ${rangeLabel(state.range)}.`,
       results: `${grouping[0].toUpperCase()}${grouping.slice(1)} results for ${rangeLabel(state.range)}.`,
       runs: `${grouping[0].toUpperCase()}${grouping.slice(1)} runs by status for ${rangeLabel(state.range)}.`,
-      users: `Average daily users by ${groupingLabel()} for ${rangeLabel(state.range)}.`,
+      users: state.grouping === "day"
+        ? `Paying and free users each day for ${rangeLabel(state.range)}.`
+        : `Average daily paying and free users per ${groupingLabel()} for ${rangeLabel(state.range)}.`,
     };
     setRangeText(description, labels[definition.key]);
   }
@@ -1074,11 +1088,16 @@
     return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
   }
 
+  // The fewest periods per side a trend compares.
+  function trendMinimum(grouping = state.grouping) {
+    return grouping === "day" ? 3 : 2;
+  }
+
   // Compares the latest N complete periods with the N before them.
   function windowTrend(values, grouping = state.grouping) {
     const cap = TREND_WINDOWS[grouping] || 7;
     const size = Math.min(cap, Math.floor(values.length / 2));
-    if (size < (grouping === "day" ? 3 : 2)) return null;
+    if (size < trendMinimum(grouping)) return null;
     const recent = average(values.slice(-size));
     const prior = average(values.slice(-size * 2, -size));
     if (!prior) return null;
@@ -1112,8 +1131,9 @@
   }
 
   // Trend detail with an arrow and sign so direction never relies on color.
-  function trendDetail(trend, higherIsBetter) {
-    if (!trend) return { text: "Not enough complete periods for a trend", tone: "neutral" };
+  // Without a trend yet, say when one appears rather than that it can't.
+  function trendDetail(trend, higherIsBetter, grouping = state.grouping) {
+    if (!trend) return { text: `Trend shows after ${trendMinimum(grouping) * 2} complete ${groupingLabel(grouping)}s`, tone: "neutral" };
     const percent = Math.abs(trend.change * 100);
     const flat = percent < 2;
     const arrow = flat ? "→" : trend.change > 0 ? "↑" : "↓";
@@ -1228,14 +1248,23 @@
       const avgPaying = average(paying);
       const avgFree = average(free);
       const share = avgPaying != null && avgPaying + avgFree ? avgPaying / (avgPaying + avgFree) : null;
-      const payingTrend = trendDetail(windowTrend(paying, grouping), true);
-      const freeTrend = trendDetail(windowTrend(free, grouping), true);
+      const rawPayingTrend = windowTrend(paying, grouping);
+      const rawFreeTrend = windowTrend(free, grouping);
+      const payingTrend = trendDetail(rawPayingTrend, true, grouping);
+      const freeTrend = trendDetail(rawFreeTrend, true, grouping);
+      const [payingSeries, freeSeries] = definition.series;
       const tiles = [
-        { label: "Paying users / day", value: formatWhole(avgPaying), detail: payingTrend.text, tone: payingTrend.tone },
-        { label: "Free users / day", value: formatWhole(avgFree), detail: freeTrend.text, tone: "neutral" },
-        { label: "Paying share", value: formatPercent(share, 0), detail: "of daily active users", tone: "neutral", title: "Average paying users divided by average paying plus free users." },
+        { label: "Paying users / day", value: formatWhole(avgPaying), detail: payingTrend.text, tone: payingTrend.tone, swatch: payingSeries },
+        { label: "Free users / day", value: formatWhole(avgFree), detail: freeTrend.text, tone: "neutral", swatch: freeSeries },
+        { label: "Paying share", value: formatPercent(share, 0), detail: "of daily active users", tone: "neutral", title: "Average paying users divided by average paying plus free users.", share: share == null ? null : { value: share, parts: [payingSeries, freeSeries] } },
       ];
-      let takeaway = "The paying and free user mix is stable.";
+      const shareText = share == null ? "" : ` at ${formatPercent(share, 0)} paying`;
+      // One complete day can't show a mix changing, so don't call it stable.
+      let takeaway = rawPayingTrend || rawFreeTrend
+        ? `The paying and free user mix is stable${shareText}.`
+        : share == null
+          ? `There aren't enough complete ${unit}s yet to compare.`
+          : `${formatPercent(share, 0)} of daily active users pay. There aren't enough complete ${unit}s yet to call a trend.`;
       if (payingTrend.tone === "good") takeaway = "Paying users are growing.";
       else if (payingTrend.tone === "bad") takeaway = "Paying users are declining. Watch for churn on your top revenue Actors.";
       else if (freeTrend.tone === "good" && share != null && share < 0.3) takeaway = "Free usage is growing faster than paid usage, which is an opportunity to improve conversion.";
@@ -1282,17 +1311,42 @@
     for (const tile of insights.tiles) {
       const item = createElement("div", `aap-range-insight aap-range-insight-${tile.tone || "neutral"}`);
       if (tile.title) item.title = tile.title;
-      item.append(
-        createElement("span", "aap-range-insight-label", tile.label),
-        createElement("strong", "aap-range-insight-value", tile.value),
-        createElement("span", "aap-range-insight-detail", tile.detail),
-      );
+      // A series' tile carries its line's key, so the figure and the line
+      // read as one thing without matching colors by eye.
+      const label = createElement("span", "aap-range-insight-label");
+      if (tile.swatch) label.appendChild(seriesSwatch(tile.swatch));
+      label.appendChild(document.createTextNode(tile.label));
+      const value = createElement("strong", "aap-range-insight-value", tile.value);
+      if (tile.share) value.appendChild(shareBar(tile.share));
+      item.append(label, value, createElement("span", "aap-range-insight-detail", tile.detail));
       grid.appendChild(item);
     }
     const takeaway = createElement("p", "aap-range-insight-takeaway", insights.takeaway);
     if (insights.note) takeaway.appendChild(createElement("span", "aap-range-insight-note", ` ${insights.note}`));
     takeaway.title = insights.note ? `${insights.takeaway} ${insights.note}` : insights.takeaway;
     strip.replaceChildren(grid, takeaway);
+  }
+
+  function seriesSwatch(series) {
+    const swatch = createElement("span", "aap-range-insight-swatch");
+    swatch.style.setProperty("--aap-swatch", series.token ? `var(${series.token}, ${series.color})` : series.color);
+    swatch.setAttribute("aria-hidden", "true");
+    return swatch;
+  }
+
+  // One whole split into its parts: the first part's share, then the rest.
+  function shareBar({ value, parts }) {
+    const bar = createElement("span", "aap-range-share-bar");
+    bar.setAttribute("aria-hidden", "true");
+    const amounts = [value, 1 - value];
+    parts.forEach((part, index) => {
+      if (amounts[index] <= 0) return;
+      const segment = seriesSwatch(part);
+      segment.className = "aap-range-share-segment";
+      segment.style.flexGrow = String(amounts[index]);
+      bar.appendChild(segment);
+    });
+    return bar;
   }
 
   function removeInsights(wrapper) {
@@ -1379,6 +1433,24 @@
     return `rgba(${value >> 16}, ${(value >> 8) & 255}, ${value & 255}, ${alpha})`;
   }
 
+  function lastValueIndex(values, seriesIndex) {
+    for (let index = values.length - 1; index >= 0; index--) {
+      if (values[index][seriesIndex] != null && Number.isFinite(values[index][seriesIndex])) return index;
+    }
+    return -1;
+  }
+
+  // User statistics labels each line's end; the other charts carry a
+  // reference line in that gutter instead.
+  function endLabelTexts(definition, series, values, partial) {
+    if (definition.key !== "users" || !values.length) return null;
+    return series.map((item, seriesIndex) => {
+      const index = lastValueIndex(values, seriesIndex);
+      if (index < 0) return null;
+      return `${formatWhole(values[index][seriesIndex])}${partial[index] ? " so far" : ""}`;
+    });
+  }
+
   function drawRangeChart(chart, definition, data, tab = null) {
     const { canvas, legend, host } = chart;
     // Keep the last successful chart visible while refreshing its data. The
@@ -1429,7 +1501,8 @@
         signed: moneyTab.kind === "signed",
         type: moneyTab.kind === "ratio" ? "line" : "bar",
       }]
-      : rangeSeries(definition, data || { days: [] });
+      : rangeSeries(definition, data || { days: [] })
+        .map((item) => item.token ? { ...item, color: token(item.token, item.color) } : item);
     const showLegend = definition.key !== "money" && series.length > 1;
     legend.style.display = showLegend ? "" : "none";
     if (showLegend) updateLegend(legend, series);
@@ -1483,7 +1556,13 @@
     ctx.font = `500 11px ${fontFamily}`;
     const guideWidth = guide ? Math.ceil(ctx.measureText(guide.label).width) + 14 : 0;
     ctx.font = `11px ${fontFamily}`;
-    const right = guide ? guideWidth + 10 : 16;
+    // Lines are labelled at their end with their latest value, in a gutter
+    // of their own; "so far" marks a period still in progress.
+    const endLabels = endLabelTexts(definition, series, values, partial);
+    ctx.font = `600 11px ${fontFamily}`;
+    const endLabelWidth = endLabels ? Math.max(...endLabels.map((label) => label ? Math.ceil(ctx.measureText(label).width) : 0)) + 14 : 0;
+    ctx.font = `11px ${fontFamily}`;
+    const right = guide ? guideWidth + 10 : endLabelWidth ? endLabelWidth + 6 : 16;
     const plotWidth = Math.max(1, rect.width - left - right);
     const plotHeight = Math.max(1, rect.height - top - bottom);
     const slot = plotWidth / data.days.length;
@@ -1614,8 +1693,8 @@
         });
         if (run.length) runs.push(run);
         const solidEnd = partial.lastIndexOf(false);
-        // A single line gets a soft fill below it.
-        if (lineSeries.length === 1 && series.length === 1) {
+        // A single line, or the line a chart is about, gets a soft fill below it.
+        if ((lineSeries.length === 1 && series.length === 1) || current.fill) {
           const gradient = ctx.createLinearGradient?.(0, top, 0, top + plotHeight);
           for (const part of runs.filter((items) => items.length > 1)) {
             ctx.save();
@@ -1661,15 +1740,17 @@
         }
         ctx.restore();
         // Points only while they stay readable; ringed in the surface color.
+        // A short range has room for the full-size markers.
         if (points.length <= 62) {
+          const sparse = points.length <= 14;
           points.forEach((point, index) => {
             if (!point) return;
             const negative = moneyTab && values[index][seriesIndex] < 0;
             ctx.beginPath();
-            ctx.arc(point.x, point.y, 3, 0, Math.PI * 2);
+            ctx.arc(point.x, point.y, sparse ? 4 : 3, 0, Math.PI * 2);
             ctx.fillStyle = partial[index] ? surfaceColor : negative ? colors.negative : current.color;
             ctx.strokeStyle = partial[index] ? current.color : surfaceColor;
-            ctx.lineWidth = 1.5;
+            ctx.lineWidth = sparse ? 2 : 1.5;
             ctx.fill();
             ctx.stroke();
           });
@@ -1710,6 +1791,25 @@
             ctx.textBaseline = "middle";
           }
         }
+      }
+    }
+
+    if (endLabels) {
+      const placed = endLabels.map((label, seriesIndex) => {
+        const index = lastValueIndex(values, seriesIndex);
+        return label && index >= 0 ? { label, x: xOf(index) + 10, y: yOf(values[index][seriesIndex]) } : null;
+      }).filter(Boolean);
+      // Labels nudged apart would no longer sit on their lines; when the
+      // lines end too close together the legend and tooltip carry it.
+      const clear = placed.every((item, index) => placed.slice(index + 1).every((other) => Math.abs(other.y - item.y) >= 15));
+      if (clear) {
+        ctx.save();
+        ctx.font = `600 11px ${fontFamily}`;
+        ctx.fillStyle = axisColor;
+        ctx.textAlign = "left";
+        ctx.textBaseline = "middle";
+        for (const item of placed) ctx.fillText(item.label, item.x, Math.min(top + plotHeight - 6, Math.max(top + 6, item.y)));
+        ctx.restore();
       }
     }
 
@@ -1787,6 +1887,9 @@
   }
 
   function renderRangeView(forceDraw = true) {
+    // Data can land after the user has moved to another Insights tab, whose
+    // charts and table share Monetization's class names. Draw only here.
+    if (!onInsightsRoute()) return;
     if (state.view !== "custom" || !validRange(state.range)) return;
     for (const wrapper of chartWrappers()) {
       const definition = definitionFor(wrapper);
@@ -2448,6 +2551,7 @@
       if (loadId === state.loadId && key === dataKey()) {
         state.loading = false;
         state.refreshing = false;
+        if (revalidationPending) setTimeout(reloadRevalidated, 0);
       }
       renderRangeView(false);
     }
@@ -2529,7 +2633,11 @@
         restoreNativeView();
       }
     }
-    if (!onInsightsRoute()) return;
+    if (!onInsightsRoute()) {
+      // A table drawn by a late render on another page would otherwise stay.
+      window.AAP_PORTFOLIO?.remove();
+      return;
+    }
     if (!rangeInitialized) initializeDefaultRange();
     if (state.view === "custom" && validRange(state.range) && !document.documentElement.classList.contains(MODE_CLASS)) setRangeMode(true);
     if (state.view === "original" && document.documentElement.classList.contains(MODE_CLASS)) setRangeMode(false);

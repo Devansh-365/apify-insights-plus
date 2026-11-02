@@ -222,15 +222,27 @@
     return tile;
   }
 
+  // The Monetization chart and these rows come from different Apify endpoints
+  // (daily totals vs. per-Actor rows), saved at different moments, so their
+  // sums can differ by cents while revenue is still landing. When the chart
+  // covers the same days, the headline uses its totals so the two agree.
+  function headlineTotals(analysis) {
+    const data = lastInput?.data;
+    const totals = data?.totals;
+    if (!totals || data.start !== analysis.months[0]) return analysis.summary;
+    return { totalRevenue: totals.revenue, totalProfit: totals.profit, margin: totals.margin };
+  }
+
   function renderSummary(analysis) {
     const { summary, thresholds } = analysis;
     const grid = createElement("div", "aap-range-insights-grid aap-portfolio-summary");
     const leader = summary.topThree[0];
+    const headline = headlineTotals(analysis);
     grid.append(
       summaryTile(
         "Revenue",
-        money(summary.totalRevenue),
-        `${money(summary.totalProfit)} profit · ${percent(summary.margin)} margin`,
+        money(headline.totalRevenue),
+        `${money(headline.totalProfit)} profit · ${percent(headline.margin)} margin`,
       ),
       summaryTile(
         "Needs action",

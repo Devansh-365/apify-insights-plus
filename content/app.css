@@ -688,6 +688,21 @@ body,
   visibility: hidden;
 }
 
+/* User statistics: paying users wear Bamboo like revenue, free users the
+   accent. Shared with the insight tiles, whose keys and share bar match the
+   lines. Dark Bamboo is a step more saturated than the bars' so the line
+   doesn't read gray against the dark surface. */
+.aap-range-chart-overlay,
+.aap-range-insights {
+  --aap-range-chart-paying: #12976f;
+  --aap-range-chart-free: #246dff;
+}
+
+body.theme-dark :is(.aap-range-chart-overlay, .aap-range-insights) {
+  --aap-range-chart-paying: #3a9f7a;
+  --aap-range-chart-free: #528fff;
+}
+
 body.theme-dark .aap-range-chart-overlay {
   --aap-range-chart-hover: color-mix(in srgb, var(--aap-range-chart-text) 7%, transparent);
   --aap-range-chart-positive: #439374;
@@ -1052,9 +1067,38 @@ body.theme-dark .aap-range-chart-overlay {
 }
 
 .aap-range-insight-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   color: var(--aap-text-subtle);
   font-size: var(--aap-font-sm);
   line-height: 16px;
+}
+
+/* A short line-key, the shape of the series it names. */
+.aap-range-insight-swatch {
+  width: 12px;
+  height: 3px;
+  flex: 0 0 12px;
+  border-radius: 2px;
+  background: var(--aap-swatch);
+}
+
+/* Paying share as one whole split into paying and free, beside the figure. */
+.aap-range-share-bar {
+  display: inline-flex;
+  width: min(120px, 45%);
+  height: 6px;
+  gap: 2px;
+  margin-left: 10px;
+  vertical-align: middle;
+}
+
+.aap-range-share-segment {
+  min-width: 2px;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--aap-swatch);
 }
 
 .aap-range-insight-value {

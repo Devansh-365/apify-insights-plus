@@ -214,8 +214,10 @@
 
   // Reuse is limited to response data the page itself just received; the
   // token is never part of the event.
-  function dispatchTee(url, data, headers) {
-    const detail = { url, data, headers };
+  // `startedAt` (when the Console sent the request) lets the extension tell
+  // whether this copy is newer than the one it already holds.
+  function dispatchTee(url, data, headers, startedAt) {
+    const detail = { url, data, headers, startedAt };
     teeBuffer.delete(url);
     teeBuffer.set(url, detail);
     if (teeBuffer.size > MAX_TEE_BUFFER) teeBuffer.delete(teeBuffer.keys().next().value);
@@ -241,7 +243,7 @@
       if (this.responseType === "" || this.responseType === "text") data = JSON.parse(this.responseText);
       else if (this.responseType === "json") data = this.response;
       else return;
-      dispatchTee(this.__aptTeeUrl, data, responseHeaders((name) => this.getResponseHeader(name)));
+      dispatchTee(this.__aptTeeUrl, data, responseHeaders((name) => this.getResponseHeader(name)), this.__aptStartedAt);
     } catch {
       /* never let teeing break the Console */
     }
@@ -257,6 +259,7 @@
       // under the previous request's URL.
       const teeUrl = String(method || "GET").toUpperCase() === "GET" ? teeableUrl(this.__aptUrl) : null;
       this.__aptTeeUrl = teeUrl;
+      this.__aptStartedAt = Date.now();
       if (teeUrl) {
         dispatchConsoleRequest(teeUrl);
         if (!this.__aptTeeListener) {
@@ -279,6 +282,7 @@
   const OrigFetch = window.fetch;
   window.fetch = function (input, init) {
     let teeUrl = null;
+    const startedAt = Date.now();
     try {
       const url = typeof input === "string" ? input : input && (input.url || input.href);
       announceSeen(parseInfo(url));
@@ -300,7 +304,7 @@
       result.then((response) => {
         if (!response?.ok) return;
         const headers = responseHeaders((name) => response.headers.get(name));
-        response.clone().json().then((data) => dispatchTee(teeUrl, data, headers)).catch(() => {});
+        response.clone().json().then((data) => dispatchTee(teeUrl, data, headers, startedAt)).catch(() => {});
       }).catch(() => {});
     }
     return result;

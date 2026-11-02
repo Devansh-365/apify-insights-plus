@@ -114,6 +114,7 @@ vm.runInNewContext(fs.readFileSync("content/token-sniffer.js", "utf8"), context)
   assert.ok(tee, "response teed to the extension");
   assert.equal(tee.detail.data.dailyProfitMarginStats["2026-10-01"], 1);
   assert.equal(tee.detail.headers.cacheControl, "no-cache");
+  assert.ok(Number.isFinite(tee.detail.startedAt), "the tee says when the Console sent its request");
 
   // Non-GET and non-analytics requests are not teed.
   const teesBefore = events.filter((event) => event.type === "aap-api-tee").length;
