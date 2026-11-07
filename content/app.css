@@ -590,6 +590,37 @@ body,
   box-shadow: var(--aap-shadow-raised);
 }
 
+.aap-range-export-button {
+  height: 32px;
+  padding: 0 12px;
+  box-sizing: border-box;
+  border: 1px solid var(--aap-range-border);
+  border-radius: var(--aap-radius);
+  color: var(--aap-range-text);
+  background: var(--aap-range-surface);
+  font: inherit;
+  font-weight: 500;
+  line-height: 30px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.aap-range-export-button:hover:not(:disabled) {
+  border-color: var(--aap-border);
+  background: var(--aap-hover);
+}
+
+.aap-range-export-button:focus-visible {
+  outline: 2px solid var(--aap-focus);
+  outline-offset: 1px;
+}
+
+.aap-range-export-button:disabled {
+  color: var(--aap-range-muted);
+  cursor: default;
+}
+
 .aap-range-input-error {
   font-size: var(--aap-font-xs);
   color: var(--aap-danger);
@@ -5391,7 +5422,8 @@ th[aria-sort="descending"] .aap-portfolio-sort {
   cursor: progress;
 }
 
-/* Sort and filter bar: one flat surface, sort on the left, filter on the right. */
+/* Sort and filter bar: quick views on top, then sort, then the optional
+   custom filter. */
 .aap-profile-sort-controls,
 .aap-profile-sorted-list {
   --aap-profile-surface: var(--aap-bg);
@@ -5404,19 +5436,103 @@ th[aria-sort="descending"] .aap-portfolio-sort {
   --aap-profile-card-surface: var(--aap-card);
 }
 
+/* Wins over Apify's own `display` on its (virtualized) Actor list. */
+[data-aap-profile-native-hidden] {
+  display: none !important;
+}
+
 .aap-profile-sort-controls {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 10px 24px;
+  gap: 12px;
   margin: -4px 0 20px;
-  padding: 12px 14px;
+  padding: 14px 16px;
   border: 1px solid var(--aap-border);
   border-radius: var(--aap-radius-lg);
   color: var(--aap-text);
   background: var(--aap-card);
   font: inherit;
   font-size: var(--aap-font-md);
+}
+
+.aap-profile-view-group {
+  display: flex;
+  flex: 1 0 100%;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--aap-separator);
+}
+
+.aap-profile-view {
+  display: inline-flex;
+  height: 28px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid var(--aap-border);
+  border-radius: 999px;
+  color: var(--aap-text-muted);
+  background: transparent;
+  font: inherit;
+  font-size: var(--aap-font-base);
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.aap-profile-view:hover {
+  color: var(--aap-text);
+  background: var(--aap-hover);
+}
+
+.aap-profile-view[aria-pressed="true"] {
+  border-color: transparent;
+  color: var(--aap-accent-soft-text);
+  background: var(--aap-accent-soft);
+}
+
+/* The ring is for keyboard focus; a click already shows the pressed state. */
+.aap-profile-view:focus:not(:focus-visible) {
+  outline: none;
+  box-shadow: none;
+}
+
+.aap-profile-view-count {
+  color: var(--aap-text-subtle);
+  font-size: var(--aap-font-sm);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.aap-profile-view[data-tone="warning"] .aap-profile-view-count {
+  color: var(--aap-warning);
+}
+
+.aap-profile-view[data-tone="danger"] .aap-profile-view-count {
+  color: var(--aap-danger);
+}
+
+.aap-profile-view[aria-pressed="true"] .aap-profile-view-count {
+  color: inherit;
+  opacity: 0.75;
+}
+
+.aap-profile-view-count[hidden],
+.aap-profile-filter-group[hidden] {
+  display: none;
+}
+
+.aap-profile-sort-group {
+  flex: 1 1 100%;
+}
+
+/* Custom filter sits at the far end of the sort row. */
+.aap-profile-filter-toggle {
+  margin-left: auto;
 }
 
 .aap-profile-sort-group,
@@ -5439,8 +5555,10 @@ th[aria-sort="descending"] .aap-portfolio-sort {
 }
 
 .aap-profile-filter-group {
-  padding-left: 24px;
-  border-left: 1px solid var(--aap-separator);
+  flex: 1 1 100%;
+  padding: 10px 12px;
+  border-radius: var(--aap-radius);
+  background: var(--aap-bg-muted);
 }
 
 .aap-profile-sort-label,
@@ -5448,7 +5566,7 @@ th[aria-sort="descending"] .aap-portfolio-sort {
 .aap-profile-filter-operator-label,
 .aap-profile-filter-threshold-label {
   display: inline-flex;
-  min-height: 36px;
+  min-height: var(--aap-control-height);
   align-items: center;
   flex: 0 0 auto;
   margin: 0;
@@ -5465,10 +5583,10 @@ th[aria-sort="descending"] .aap-portfolio-sort {
 .aap-profile-filter-select,
 .aap-profile-filter-operator,
 .aap-profile-filter-input,
-.aap-profile-filter-apply,
+.aap-profile-filter-toggle,
 .aap-profile-filter-clear {
-  height: 36px;
-  min-height: 36px;
+  height: var(--aap-control-height);
+  min-height: var(--aap-control-height);
   box-sizing: border-box;
   border: 1px solid var(--aap-field-border);
   border-radius: var(--aap-radius);
@@ -5525,7 +5643,7 @@ th[aria-sort="descending"] .aap-portfolio-sort {
 
 .aap-profile-sort-direction,
 .aap-profile-sort-retry,
-.aap-profile-filter-apply,
+.aap-profile-filter-toggle,
 .aap-profile-filter-clear {
   padding: 0 12px;
   border-color: var(--aap-border);
@@ -5542,23 +5660,17 @@ th[aria-sort="descending"] .aap-portfolio-sort {
 
 .aap-profile-sort-direction:hover:not(:disabled),
 .aap-profile-sort-retry:hover,
+.aap-profile-filter-toggle:hover,
 .aap-profile-filter-clear:hover {
   border-color: var(--aap-border);
   background: var(--aap-hover);
 }
 
-.aap-profile-filter-apply {
-  border-color: transparent;
-  color: var(--aap-accent-soft-text);
-  background: var(--aap-accent-soft);
-  font-weight: 600;
+.aap-profile-filter-toggle[aria-expanded="true"] {
+  border-color: var(--aap-field-border);
+  background: var(--aap-hover);
 }
 
-.aap-profile-filter-apply:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--aap-accent-soft) 80%, var(--aap-accent) 20%);
-}
-
-.aap-profile-filter-apply:disabled,
 .aap-profile-sort-retry:disabled {
   cursor: wait;
   opacity: 0.6;
@@ -5578,9 +5690,20 @@ th[aria-sort="descending"] .aap-portfolio-sort {
   line-height: 18px;
 }
 
-.aap-profile-sort-controls[data-filter-active="true"] .aap-profile-sort-status {
+.aap-profile-sort-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+.aap-profile-sort-status-main {
   color: var(--aap-text);
-  font-weight: 500;
+  font-weight: 600;
+}
+
+.aap-profile-sort-status-detail {
+  color: var(--aap-text-subtle);
 }
 
 .aap-profile-sort-status-error,
@@ -5895,7 +6018,7 @@ th[aria-sort="descending"] .aap-portfolio-sort {
   .aap-profile-filter-select,
   .aap-profile-filter-operator,
   .aap-profile-filter-input,
-  .aap-profile-filter-apply,
+  .aap-profile-filter-toggle,
   .aap-profile-filter-clear {
     min-width: 0;
     flex: 1 1 140px;
@@ -5907,7 +6030,7 @@ th[aria-sort="descending"] .aap-portfolio-sort {
   }
 
   .aap-profile-sort-direction,
-  .aap-profile-filter-apply,
+  .aap-profile-filter-toggle,
   .aap-profile-filter-clear,
   .aap-profile-sort-retry {
     flex-basis: 120px;
@@ -5952,7 +6075,7 @@ th[aria-sort="descending"] .aap-portfolio-sort {
   .aap-profile-filter-select,
   .aap-profile-filter-operator,
   .aap-profile-filter-input,
-  .aap-profile-filter-apply,
+  .aap-profile-filter-toggle,
   .aap-profile-filter-clear {
     width: 100%;
     flex-basis: 100%;
@@ -6015,6 +6138,7 @@ th[aria-sort="descending"] .aap-portfolio-sort {
   .aap-range-field select,
   .aap-range-grouping select,
   .aap-range-quick-button,
+  .aap-range-export-button,
   .aap-range-tooltip-close,
   .aap-range-tooltip-action,
   .aap-insights-controls input,
@@ -6028,7 +6152,8 @@ th[aria-sort="descending"] .aap-portfolio-sort {
   .aap-profile-filter-select,
   .aap-profile-filter-operator,
   .aap-profile-filter-input,
-  .aap-profile-filter-apply,
+  .aap-profile-filter-toggle,
+  .aap-profile-view,
   .aap-profile-filter-clear,
   .aap-profile-sort-card,
   .aap-actor-detail-accordion-summary
@@ -6045,10 +6170,12 @@ th[aria-sort="descending"] .aap-portfolio-sort {
 :where(
   .aap-tt-action,
   .aap-range-quick-button,
+  .aap-range-export-button,
   .aap-range-tooltip-action,
   .aap-profile-sort-direction,
   .aap-profile-sort-retry,
-  .aap-profile-filter-apply,
+  .aap-profile-filter-toggle,
+  .aap-profile-view,
   .aap-profile-filter-clear
 ):active:not(:disabled) {
   transform: scale(0.98);

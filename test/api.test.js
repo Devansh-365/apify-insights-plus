@@ -120,6 +120,14 @@ window.dispatchEvent(new SimpleCustomEvent("aap-auth-scope", { detail: "account-
   assert.deepEqual([...pooledResults], ["ok", null]);
   assert.equal(pooledResults.failures.length, 1);
   assert.equal(pooledResults.failures[0].item.id, "bad");
+  let running = 0;
+  let mostRunning = 0;
+  await pooled([1, 2, 3], async () => {
+    mostRunning = Math.max(mostRunning, ++running);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    running--;
+  }, null, { concurrency: 1 });
+  assert.equal(mostRunning, 1, "pooled can run one item at a time");
 
   const range = await context.self.AAP_API.rangeData("2026-01-01", "2026-02-02", []);
   assert.equal(range.months.length, 2);
@@ -163,6 +171,21 @@ window.dispatchEvent(new SimpleCustomEvent("aap-auth-scope", { detail: "account-
   assert.equal(publicRequests[1].searchParams.get("sortBy"), "newest");
   assert.equal(publicRequests[1].searchParams.get("includeUnrunnableActors"), "true");
   assert.equal(publicStore.data.id, "public-actor");
+
+  // A month's analytics export is large and downloaded once, so it skips the cache.
+  const readsBeforeExport = cacheReads;
+  const writesBeforeExport = cacheWrites;
+  await context.self.AAP_API.analyticsExport("2026-01-01", []);
+  const exportRequest = requests[requests.length - 1];
+  assert.equal(exportRequest.pathname, "/actor-analytics/export");
+  assert.equal(exportRequest.searchParams.get("month"), "2026-01-01");
+  assert.equal(exportRequest.searchParams.get("shouldDownload"), "false");
+  assert.equal(exportRequest.searchParams.has("actorIds"), false, "an unfiltered export sends no actorIds");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(cacheReads, readsBeforeExport, "exports bypass cache reads");
+  assert.equal(cacheWrites, writesBeforeExport, "exports bypass cache writes");
+  await context.self.AAP_API.analyticsExport("2026-01-01", ["actor-a", "actor-b"]);
+  assert.equal(requests[requests.length - 1].searchParams.get("actorIds"), "actor-a,actor-b");
 
   const readsBeforeNoStore = cacheReads;
   const writesBeforeNoStore = cacheWrites;

@@ -97,6 +97,7 @@
     "shared-runs",
     "user-count-statistics",
     "costs-per-thousand-results",
+    "export",
   ]);
 
   function allowedApiUrl(value) {
@@ -121,8 +122,10 @@
           ? new Set(["monthStartAt", "actorIds", "portionOfMonthElapsed"])
           : url.pathname === "/actor-analytics/shared-runs"
             ? new Set(["actorIds", "tiers", "limit", "searchAfter", "searchBefore", "sort[finishedAt]"])
-            : url.pathname.startsWith("/actor-analytics/")
-              ? new Set(["month", "actorIds"])
+            : url.pathname === "/actor-analytics/export"
+              ? new Set(["month", "actorIds", "shouldDownload"])
+              : url.pathname.startsWith("/actor-analytics/")
+                ? new Set(["month", "actorIds"])
               : new Set();
       if ([...queryKeys].some((key) => !allowedQueryKeys.has(key))) return null;
       if ([...url.searchParams.values()].some((value) => value.length > 2048)) return null;

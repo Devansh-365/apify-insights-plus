@@ -44,6 +44,7 @@
         "lib/local-store.js",
         "lib/format.js",
         "lib/range.js",
+        "lib/analytics-export.js",
         "lib/actor-detail.js",
         "lib/profile-sort.js",
         "lib/visibility.js",

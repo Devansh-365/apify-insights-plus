@@ -406,18 +406,24 @@
     dailyObserver.observe(element);
   }
 
-  async function loadDaily(actorId) {
+  async function loadDaily(actorId, priority = "foreground") {
     const month = state.monthStartAt;
     const requestId = state.requestId;
     const key = `${requestId}|${actorId}`;
     if (!actorId || dailyLoading.has(key)) return;
     dailyLoading.add(key);
     try {
-      const raw = await AAP_API.runStatistics(month, [actorId], { priority: "foreground" });
+      const raw = await AAP_API.runStatistics(month, [actorId], { priority });
       if (requestId !== state.requestId || month !== state.monthStartAt) return;
       const row = state.rows.find((item) => item.actor.id === actorId);
       if (!row) return;
       row.stats = statsFor(raw);
+      if (state.sort === "worstDay") {
+        // The row's place in the order can change, so re-sort the table.
+        scheduleRerender();
+        scheduleViewSave();
+        return;
+      }
       const existing = refs?.actorsBody?.querySelector(`tr[data-actor-id="${CSS.escape(actorId)}"]`);
       if (existing) existing.replaceWith(chartRow(row));
       scheduleViewSave();
@@ -426,6 +432,45 @@
     } finally {
       dailyLoading.delete(key);
     }
+  }
+
+  let rerenderTimer = null;
+
+  // At most one re-sort per 400ms while a batch of daily series arrives.
+  function scheduleRerender() {
+    if (rerenderTimer) return;
+    rerenderTimer = setTimeout(() => {
+      rerenderTimer = null;
+      renderRows();
+    }, 400);
+  }
+
+  const worstDayAttempts = new Set();
+
+  // Only Actors with a failed run can have a day below 100%, so those are
+  // the only daily series the worst-day order has to fetch.
+  function loadWorstDayCandidates() {
+    if (state.sort !== "worstDay" || state.selectedActorId) return;
+    for (const row of state.rows) {
+      if (!row.stats?.summaryOnly || !(row.stats.failed > 0)) continue;
+      const key = `${state.requestId}|${row.actor.id}`;
+      if (worstDayAttempts.has(key)) continue;
+      worstDayAttempts.add(key);
+      loadDaily(row.actor.id, "background");
+    }
+  }
+
+  // The lowest daily success rate. Before the daily series loads, an Actor
+  // with no failures is 100% every day, and one with failures has a worst
+  // day at or below its monthly rate, which stands in until it arrives.
+  function worstDayRate(stats) {
+    if (!stats) return null;
+    if (stats.summaryOnly) {
+      if (!(stats.total > 0)) return null;
+      return stats.failed > 0 ? stats.rate : 1;
+    }
+    const values = rateEntries(stats).map((entry) => entry.rate).filter((value) => value != null);
+    return values.length ? Math.min(...values) : null;
   }
 
   function statsFor(raw) {
@@ -519,6 +564,7 @@
         if (!row?.stats) return null;
         if (state.sort === "failed") return number(row.stats.failed);
         if (state.sort === "total") return number(row.stats.total);
+        if (state.sort === "worstDay") return worstDayRate(row.stats);
         return number(row.stats.rate);
       };
       const valueA = valueFor(a);
@@ -604,8 +650,7 @@
       );
       return cell;
     }
-    const values = rateEntries(stats).map((entry) => entry.rate).filter((value) => value != null);
-    const lowest = values.length ? Math.min(...values) : null;
+    const lowest = worstDayRate(stats);
     // Only call out the worst day when it fell below the chart's 95% guide.
     const lowestClass = lowest != null && lowest < 0.95 ? "aap-debugging-lowest aap-debugging-lowest-warning" : "aap-debugging-lowest";
     cell.append(
@@ -794,6 +839,7 @@
       if (state.total) refs.overviewBody.appendChild(chartRow({ actor: totalActor, stats: state.total }, true));
       else if (state.loading) refs.overviewBody.appendChild(chartRow({ actor: totalActor, loading: true }, true));
       else refs.overviewBody.appendChild(emptyTableRow(state.error || "No run data available."));
+      loadWorstDayCandidates();
       refs.actorsBody.replaceChildren();
       for (const row of sortedRows()) refs.actorsBody.appendChild(chartRow(row));
       if (!sortedRows().length && !state.loading) refs.actorsBody.appendChild(emptyTableRow(state.error || "No Actor run data available."));
@@ -845,7 +891,7 @@
     const sort = document.createElement("select");
     sort.className = "aap-debugging-sort";
     sort.setAttribute("aria-label", "Sort Actors by");
-    for (const [value, label] of [["rate", "Success rate"], ["failed", "Failed runs"], ["total", "Total runs"], ["name", "Name"]]) {
+    for (const [value, label] of [["rate", "Success rate"], ["worstDay", "Worst day"], ["failed", "Failed runs"], ["total", "Total runs"], ["name", "Name"]]) {
       const option = document.createElement("option");
       option.value = value;
       option.textContent = `Sort by ${label}`;
@@ -854,6 +900,8 @@
     sort.value = state.sort;
     sort.addEventListener("change", () => {
       state.sort = sort.value;
+      // Worst days first: the point of this order is finding bad days.
+      if (state.sort === "worstDay") state.direction = "asc";
       renderRows();
     });
     const order = createElement("button", "aap-debugging-order", state.direction === "asc" ? "↑ Asc" : "↓ Desc");

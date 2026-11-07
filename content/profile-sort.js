@@ -22,10 +22,13 @@
     filterSelect: null,
     filterOperatorSelect: null,
     filterInput: null,
-    applyFilterButton: null,
     clearFilterButton: null,
     filter: null,
     filterError: null,
+    view: "all",
+    viewButtons: null,
+    filterToggle: null,
+    filterGroup: null,
     heading: null,
     list: null,
     host: null,
@@ -41,6 +44,8 @@
     profileStatsError: null,
     profileStatsPromise: null,
     profileStatsLoadedAt: 0,
+    profileUserStats: null,
+    profileUserStatsPromise: null,
     catalog: null,
     catalogSortKey: null,
     loading: false,
@@ -106,10 +111,37 @@
     ));
   }
 
+  // Apify's own value node, e.g. "6.6K" in "6.6K total users".
+  function nativeValueNode(label) {
+    return [...label.childNodes].find((node) => node.nodeType === Node.TEXT_NODE && node.nodeValue.trim());
+  }
+
+  // Swaps the rounded value for the exact count in place, so the row keeps
+  // Apify's own markup; React can still update the same text node.
+  function showExactNativeValue(label, metricKey) {
+    const exact = state.profileUserStats?.[metricKey];
+    const node = nativeValueNode(label);
+    if (exact == null || !node) return;
+    const text = AAPF.count(exact);
+    if (node.nodeValue === text) return;
+    if (!/^[\d.,]+\s*[KMB]?$/i.test(node.nodeValue.trim())) return;
+    label.dataset.aapCompactValue = node.nodeValue;
+    node.nodeValue = text;
+    label.title = `Exact count. Apify rounds it to ${label.dataset.aapCompactValue.trim()}.`;
+  }
+
+  function restoreNativeValue(label) {
+    const node = nativeValueNode(label);
+    if (node && label.dataset.aapCompactValue != null) node.nodeValue = label.dataset.aapCompactValue;
+    delete label.dataset.aapCompactValue;
+    label.removeAttribute("title");
+  }
+
   function clearNativeMetricDecorations() {
-    document.querySelectorAll("[data-aap-profile-native-metric-row]").forEach((row) => {
+    document.querySelectorAll("[data-aap-profile-native-metric]").forEach((row) => {
       row.querySelectorAll("[data-aap-profile-benchmark-tag]").forEach((slot) => slot.remove());
       row.querySelectorAll(".aap-profile-native-metric-label").forEach((label) => {
+        restoreNativeValue(label);
         label.classList.remove("aap-profile-native-metric-label");
       });
       row.classList.remove("aap-profile-native-metric-row");
@@ -125,6 +157,7 @@
       row.classList.add("aap-profile-native-metric-row");
       row.dataset.aapProfileNativeMetric = metricKey;
       label.classList.add("aap-profile-native-metric-label");
+      showExactNativeValue(label, metricKey);
       let slot = row.querySelector(`[data-aap-profile-benchmark-tag="${metricKey}"]`);
       if (!slot) {
         slot = createElement("span", "aap-profile-benchmark-slot aap-profile-benchmark-slot-row");
@@ -230,6 +263,40 @@
     state.profileStatsError = null;
     state.profileStatsPromise = null;
     state.profileStatsLoadedAt = 0;
+    state.profileUserStats = null;
+    state.profileUserStatsPromise = null;
+  }
+
+  // The profile page embeds its exact user counts. A full page load has them
+  // in its own scripts; after in-app navigation those scripts belong to the
+  // first profile, so the new profile's page is fetched instead.
+  async function fetchDeveloperUserStats(route) {
+    for (const script of document.scripts) {
+      const text = script.textContent;
+      if (!text.includes("actorsTotalUsers")) continue;
+      const stats = AAP_PROFILE_SORT.parseDeveloperUserStats(text, route.username);
+      if (stats) return stats;
+    }
+    const response = await fetch(`/${encodeURIComponent(route.username)}`, {
+      credentials: "omit",
+      headers: { Accept: "text/html" },
+    });
+    if (!response.ok) throw new Error(`Profile page request failed: HTTP ${response.status}`);
+    return AAP_PROFILE_SORT.parseDeveloperUserStats(await response.text(), route.username);
+  }
+
+  function loadDeveloperUserStats(route) {
+    if (state.profileUserStats || state.profileUserStatsPromise) return;
+    const operation = fetchDeveloperUserStats(route)
+      .then((stats) => {
+        if (state.profileStatsRouteKey !== route.key || !stats) return;
+        state.profileUserStats = stats;
+        const mount = findProfileStatsMount();
+        if (mount) decorateNativeMetricRows(mount);
+      })
+      // Without exact counts, Apify's rounded values simply stay.
+      .catch(() => {});
+    state.profileUserStatsPromise = operation;
   }
 
   function findProfileStatsMount() {
@@ -256,6 +323,8 @@
         if (state.profileStatsRouteKey !== route.key) return;
         state.profileStats = AAP_PROFILE_SORT.aggregateActorStats(actors);
         state.profileStatsLoadedAt = catalogCache.get(`${route.key}:default`)?.loadedAt ?? Date.now();
+        // The same catalog counts the quick views.
+        updateControls();
       } catch (error) {
         if (state.profileStatsRouteKey !== route.key) return;
         state.profileStatsError = AAPF.errorText(error, "Profile run statistics could not be loaded.");
@@ -278,6 +347,7 @@
     const mount = findProfileStatsMount();
     if (!mount) return;
 
+    loadDeveloperUserStats(route);
     decorateNativeMetricRows(mount);
 
     let host = mount.querySelector(`.${PROFILE_STATS_HOST_CLASS}`);
@@ -345,15 +415,26 @@
     return AAP_PROFILE_SORT.metricValue(actor, key);
   }
 
+  // Whether the cards differ from Apify's own list at all.
+  function isCustomized() {
+    return state.sortKey !== "default" || Boolean(state.filter) || state.view !== "all";
+  }
+
   function filteredActors() {
     if (!state.catalog) return [];
-    if (!state.filter) return [...state.catalog];
+    const inView = AAP_PROFILE_SORT.viewActors(state.catalog, state.view);
+    if (!state.filter) return inView;
     return AAP_PROFILE_SORT.filterActors(
-      state.catalog,
+      inView,
       state.filter.key,
       state.filter.operator,
       state.filter.threshold,
     );
+  }
+
+  // Any loaded catalog counts the views; the profile stats load one early.
+  function countingCatalog() {
+    return state.catalog || catalogCache.get(`${state.routeKey}:default`)?.actors || null;
   }
 
   function filterDescription(filter) {
@@ -368,6 +449,23 @@
     chip.append(createElement("span", "aap-profile-sort-card-chip-label", label));
     chip.append(valueElement);
     return chip;
+  }
+
+  function viewChip(actor) {
+    const kind = AAP_PROFILE_SORT.viewFor(state.view).chip;
+    if (kind === "drop") {
+      const drop = AAP_PROFILE_SORT.userDrop(actor);
+      if (!drop) return null;
+      const chip = metricChip(`Last ${drop.window}`, `−${Math.round(-drop.change * 100)}% vs avg`);
+      chip.title = `At least ${Math.round(-drop.change * 100)}% fewer users in the last ${drop.window} than the Actor's average for that length of time.`;
+      return chip;
+    }
+    if (kind === "health") {
+      if (actor.notice === "UNDER_MAINTENANCE") return metricChip("Status", "Under maintenance");
+      return metricChip("Rating", `${actor.actorReviewRating.toFixed(1)} (${actor.actorReviewCount} reviews)`);
+    }
+    if (kind === "week") return metricChip("7-day users", formatCompact(actor.users7));
+    return null;
   }
 
   function createActorCard(actor) {
@@ -408,8 +506,9 @@
     const summary = createElement("div", "aap-profile-sort-card-summary");
     summary.append(
       metricChip(AAP_PROFILE_SORT.optionLabel(state.sortKey), metricDisplay(actor, state.sortKey)),
-      metricChip("Pricing", pricingLabel(actor)),
-      metricChip("MAU", formatCompact(actor.mau)),
+      // A view shows the number that put the Actor in it.
+      viewChip(actor) || metricChip("Pricing", pricingLabel(actor)),
+      state.sortKey === "mau" ? metricChip("Users", formatCompact(actor.users)) : metricChip("MAU", formatCompact(actor.mau)),
       metricChip("Last run", formatRelativeTime(actor.lastRunAt)),
     );
     main.appendChild(summary);
@@ -439,16 +538,47 @@
     return card;
   }
 
-  function setStatus(text, isError = false) {
+  // `detail` follows the main text in quieter type.
+  function setStatus(text, isError = false, detail = "") {
     if (!state.status) return;
-    state.status.textContent = text || "";
+    if (detail) {
+      state.status.replaceChildren(
+        createElement("strong", "aap-profile-sort-status-main", text),
+        createElement("span", "aap-profile-sort-status-detail", detail),
+      );
+    } else {
+      state.status.textContent = text || "";
+    }
     state.status.classList.toggle("aap-profile-sort-status-error", isError);
+  }
+
+  // Apify's list styles set `display`, which beats the hidden attribute, and
+  // its virtualized rows would keep drawing over the sorted cards.
+  function setNativeListHidden(hidden) {
+    if (!state.list?.isConnected) return;
+    state.list.hidden = hidden;
+    state.list.toggleAttribute("data-aap-profile-native-hidden", hidden);
   }
 
   function updateControls() {
     if (!state.host) return;
     state.host.setAttribute("aria-busy", state.loading ? "true" : "false");
-    state.host.dataset.filterActive = state.filter ? "true" : "false";
+    state.host.dataset.filterActive = state.filter || state.view !== "all" ? "true" : "false";
+    const counts = countingCatalog() ? AAP_PROFILE_SORT.viewCounts(countingCatalog()) : null;
+    for (const [key, button] of state.viewButtons || []) {
+      button.setAttribute("aria-pressed", key === state.view ? "true" : "false");
+      const count = button.querySelector(".aap-profile-view-count");
+      count.textContent = counts ? counts[key].toLocaleString() : "";
+      count.hidden = !counts;
+      // Views that call for action stand out while they have Actors in them.
+      const tone = AAP_PROFILE_SORT.viewFor(key).tone;
+      if (tone && counts?.[key] > 0) button.dataset.tone = tone;
+      else delete button.dataset.tone;
+    }
+    if (state.filterToggle) {
+      state.filterToggle.setAttribute("aria-expanded", state.filterGroup.hidden ? "false" : "true");
+      state.filterToggle.textContent = state.filter ? "Custom filter · on" : "Custom filter";
+    }
     state.host.dataset.state = state.loading
       ? "loading"
       : (state.error || state.filterError ? "error" : "ready");
@@ -465,18 +595,27 @@
     }
     if (state.retryButton) state.retryButton.hidden = !state.error;
     if (state.clearFilterButton) state.clearFilterButton.hidden = !state.filter;
-    if (state.applyFilterButton) state.applyFilterButton.disabled = state.loading;
     if (state.loading) {
       setStatus("Loading Actor metrics…");
     } else if (state.filterError) {
       setStatus(state.filterError, true);
     } else if (state.error) {
       setStatus(state.error, true);
-    } else if (state.catalog && state.filter) {
-      const visibleCount = filteredActors().length;
-      setStatus(`${filterDescription(state.filter)} · ${visibleCount.toLocaleString()} of ${state.catalog.length.toLocaleString()} Actors`);
+    } else if (state.catalog && (state.filter || state.view !== "all")) {
+      const view = AAP_PROFILE_SORT.viewFor(state.view);
+      const share = state.view === "top" ? AAP_PROFILE_SORT.topShare(state.catalog) : null;
+      const details = [
+        state.view !== "all" ? view.description : null,
+        share == null ? null : `Top 10 hold ${Math.round(share * 100)}% of monthly users`,
+        state.filter ? filterDescription(state.filter) : null,
+      ];
+      setStatus(
+        `${filteredActors().length.toLocaleString()} of ${state.catalog.length.toLocaleString()} Actors`,
+        false,
+        details.filter(Boolean).join(" · "),
+      );
     } else if (state.sortKey === "default") {
-      setStatus("Choose a sort or filter the cards by a metric threshold.");
+      setStatus("Pick a view to answer a question in one click, or sort by any metric.");
     } else if (state.catalog) {
       const label = AAP_PROFILE_SORT.optionLabel(state.sortKey);
       const missing = state.catalog.filter((actor) => metricValue(actor, state.sortKey) == null).length;
@@ -485,30 +624,58 @@
     }
   }
 
+  // Shows the cards for the current view, sort, and filter, or Apify's own
+  // list when none of them changes anything.
+  function showCurrentView() {
+    if (isCustomized()) requestView();
+    else restoreOriginal();
+  }
+
+  // The custom filter applies as it is typed; an empty threshold removes it.
   function applyFilter() {
     const key = state.filterSelect?.value;
     const operator = state.filterOperatorSelect?.value;
     const rawValue = String(state.filterInput?.value || "").trim();
     const threshold = Number(rawValue);
-    if (!rawValue || !Number.isFinite(threshold) || threshold < 0) {
-      state.filterError = "Enter a non-negative number to apply this filter.";
+    if (!rawValue) {
+      if (state.filter || state.filterError) clearFilter();
+      return;
+    }
+    if (!Number.isFinite(threshold) || threshold < 0) {
+      state.filterError = "Enter a number of 0 or more.";
       updateControls();
-      state.filterInput?.focus();
       return;
     }
     state.filter = { key, operator, threshold };
     state.filterError = null;
     state.error = null;
-    requestView();
+    showCurrentView();
   }
 
   function clearFilter() {
     state.filter = null;
     state.filterError = null;
     if (state.filterInput) state.filterInput.value = "";
-    if (state.sortKey === "default") restoreOriginal();
-    else renderSortedList();
+    showCurrentView();
     updateControls();
+  }
+
+  // A view sets its own sort; "All Actors" returns to Apify's order.
+  function selectView(key) {
+    const view = AAP_PROFILE_SORT.viewFor(key);
+    state.view = view.key;
+    state.sortKey = view.sortKey || "default";
+    state.direction = "desc";
+    state.error = null;
+    showCurrentView();
+    updateControls();
+  }
+
+  function resetView() {
+    state.filter = null;
+    state.filterError = null;
+    if (state.filterInput) state.filterInput.value = "";
+    selectView("all");
   }
 
   function createControls() {
@@ -516,7 +683,7 @@
     host.setAttribute("role", "region");
     host.setAttribute("aria-label", "Sort and filter public Actors");
 
-    const label = createElement("label", "aap-profile-sort-label", "Sort Actors by");
+    const label = createElement("label", "aap-profile-sort-label", "Sort by");
     const select = createElement("select", "aap-profile-sort-select");
     select.id = `aap-profile-sort-${Date.now()}`;
     label.htmlFor = select.id;
@@ -526,11 +693,7 @@
     select.addEventListener("change", () => {
       state.sortKey = select.value;
       state.error = null;
-      if (state.sortKey === "default" && !state.filter) {
-        restoreOriginal();
-      } else {
-        requestView();
-      }
+      showCurrentView();
     });
 
     const directionButton = createElement("button", "aap-profile-sort-direction", "High → low");
@@ -584,18 +747,46 @@
       filterOperatorSelect.value = state.filter.operator;
       filterInput.value = String(state.filter.threshold);
     }
-    filterInput.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") applyFilter();
+    let filterTimer = null;
+    filterInput.addEventListener("input", () => {
+      clearTimeout(filterTimer);
+      filterTimer = setTimeout(applyFilter, 300);
     });
-
-    const applyFilterButton = createElement("button", "aap-profile-filter-apply", "Apply filter");
-    applyFilterButton.type = "button";
-    applyFilterButton.addEventListener("click", applyFilter);
+    filterInput.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      clearTimeout(filterTimer);
+      applyFilter();
+    });
+    for (const control of [filterSelect, filterOperatorSelect]) {
+      control.addEventListener("change", () => {
+        if (String(filterInput.value).trim()) applyFilter();
+      });
+    }
 
     const clearFilterButton = createElement("button", "aap-profile-filter-clear", "Clear filter");
     clearFilterButton.type = "button";
     clearFilterButton.hidden = true;
     clearFilterButton.addEventListener("click", clearFilter);
+
+    const viewGroup = createElement("div", "aap-profile-view-group");
+    viewGroup.setAttribute("role", "group");
+    viewGroup.setAttribute("aria-label", "Quick views");
+    const viewButtons = new Map();
+    for (const view of AAP_PROFILE_SORT.VIEWS) {
+      const button = createElement("button", "aap-profile-view");
+      button.type = "button";
+      button.title = view.description;
+      button.setAttribute("aria-pressed", view.key === state.view ? "true" : "false");
+      const count = createElement("span", "aap-profile-view-count");
+      count.hidden = true;
+      button.append(createElement("span", "aap-profile-view-label", view.label), count);
+      button.addEventListener("click", () => (view.key === "all" ? resetView() : selectView(view.key)));
+      viewButtons.set(view.key, button);
+      viewGroup.appendChild(button);
+    }
+
+    const filterToggle = createElement("button", "aap-profile-filter-toggle", "Custom filter");
+    filterToggle.type = "button";
 
     const sortGroup = createElement("div", "aap-profile-sort-group");
     sortGroup.setAttribute("role", "group");
@@ -612,17 +803,27 @@
       filterOperatorSelect,
       filterThresholdLabel,
       filterInput,
-      applyFilterButton,
       clearFilterButton,
-      retryButton,
     );
+    filterGroup.id = `${filterSelect.id}-group`;
+    filterGroup.hidden = !state.filter;
+    filterToggle.setAttribute("aria-controls", filterGroup.id);
+    filterToggle.addEventListener("click", () => {
+      filterGroup.hidden = !filterGroup.hidden;
+      updateControls();
+      if (!filterGroup.hidden) filterInput.focus();
+    });
+    sortGroup.append(filterToggle, retryButton);
 
     const status = createElement("span", "aap-profile-sort-status");
     status.id = `${filterSelect.id}-status`;
     status.setAttribute("role", "status");
     status.setAttribute("aria-live", "polite");
     filterInput.setAttribute("aria-describedby", status.id);
-    host.append(sortGroup, filterGroup, status);
+    host.append(viewGroup, sortGroup, filterGroup, status);
+    state.viewButtons = viewButtons;
+    state.filterToggle = filterToggle;
+    state.filterGroup = filterGroup;
     state.host = host;
     state.select = select;
     state.directionButton = directionButton;
@@ -630,7 +831,6 @@
     state.filterSelect = filterSelect;
     state.filterOperatorSelect = filterOperatorSelect;
     state.filterInput = filterInput;
-    state.applyFilterButton = applyFilterButton;
     state.clearFilterButton = clearFilterButton;
     state.status = status;
     updateControls();
@@ -642,7 +842,7 @@
     state.renderedCount = 0;
     if (state.sortedList) state.sortedList.remove();
     state.sortedList = null;
-    if (state.list?.isConnected) state.list.hidden = false;
+    setNativeListHidden(false);
     updateControls();
   }
 
@@ -663,7 +863,7 @@
   }
 
   function renderSortedList() {
-    if (!state.list?.isConnected || !state.catalog || (state.sortKey === "default" && !state.filter)) return;
+    if (!state.list?.isConnected || !state.catalog || !isCustomized()) return;
     state.renderToken++;
     const token = state.renderToken;
     if (state.sortedList) state.sortedList.remove();
@@ -672,14 +872,14 @@
     root.dataset.direction = state.direction;
     if (state.filter) root.dataset.filter = filterDescription(state.filter);
     state.sortedList = root;
-    state.list.hidden = true;
+    setNativeListHidden(true);
     state.list.parentNode.insertBefore(root, state.list);
     const items = AAP_PROFILE_SORT.sortActors(filteredActors(), state.sortKey, state.direction);
     if (!items.length) {
       root.appendChild(createElement(
         "p",
         "aap-profile-sort-empty",
-        state.filter ? "No public Actors match this filter." : "No public Actors were returned for this profile.",
+        state.filter || state.view !== "all" ? "No public Actors match this view." : "No public Actors were returned for this profile.",
       ));
       updateControls();
       return;
@@ -689,7 +889,8 @@
   }
 
   function catalogCacheScope(routeKey, catalogSortKey) {
-    return `profile:${routeKey}:${catalogSortKey}`;
+    // v2: Actors carry 7- and 90-day user counts.
+    return `profile:v2:${routeKey}:${catalogSortKey}`;
   }
 
   // The last saved catalog at any age, for painting before a refresh.
@@ -791,7 +992,7 @@
       if (requestId !== state.requestId || state.routeKey !== route.key) return;
       state.catalog = actors;
       state.catalogSortKey = catalogSortKey;
-      if (state.sortKey !== "default" || state.filter) renderSortedList();
+      if (isCustomized()) renderSortedList();
     } catch (error) {
       if (requestId !== state.requestId || state.routeKey !== route.key) return;
       state.error = AAPF.errorText(error, "Actor metrics could not be loaded.");
@@ -807,7 +1008,7 @@
 
   function requestView(force = false) {
     const route = profileRoute();
-    if (!route || (state.sortKey === "default" && !state.filter)) return;
+    if (!route || !isCustomized()) return;
     // Metric sorts work on any catalog; Store-ordered sorts and the default
     // order (a filter alone) need the catalog in that order.
     const wanted = AAP_PROFILE_SORT.catalogOrder(state.sortKey);
@@ -825,7 +1026,7 @@
       state.renderToken++;
       state.sortedList?.remove();
       state.host?.remove();
-      if (state.list?.isConnected) state.list.hidden = false;
+      setNativeListHidden(false);
       state.requestId++;
       state.routeKey = route.key;
       state.username = route.username;
@@ -834,10 +1035,13 @@
       state.filterSelect = null;
       state.filterOperatorSelect = null;
       state.filterInput = null;
-      state.applyFilterButton = null;
       state.clearFilterButton = null;
       state.filter = null;
       state.filterError = null;
+      state.view = "all";
+      state.viewButtons = null;
+      state.filterToggle = null;
+      state.filterGroup = null;
       state.heading = null;
       state.list = null;
       state.host = null;
@@ -863,8 +1067,10 @@
       state.host?.remove();
       const host = createControls();
       surface.heading.insertAdjacentElement("afterend", host);
+      // Counts the quick views; shares the profile stats' cached request.
+      fetchCatalog(route, "default", "background").then(() => updateControls()).catch(() => {});
     }
-    if ((state.sortKey !== "default" || state.filter) && state.catalog && (!state.sortedList || !state.sortedList.isConnected)) {
+    if (isCustomized() && state.catalog && (!state.sortedList || !state.sortedList.isConnected)) {
       renderSortedList();
     }
     updateControls();
@@ -873,7 +1079,7 @@
   function removePage() {
     state.requestId++;
     state.renderToken++;
-    if (state.list?.isConnected) state.list.hidden = false;
+    setNativeListHidden(false);
     state.sortedList?.remove();
     state.host?.remove();
     state.routeKey = null;
@@ -881,10 +1087,13 @@
     state.filterSelect = null;
     state.filterOperatorSelect = null;
     state.filterInput = null;
-    state.applyFilterButton = null;
     state.clearFilterButton = null;
     state.filter = null;
     state.filterError = null;
+    state.view = "all";
+    state.viewButtons = null;
+    state.filterToggle = null;
+    state.filterGroup = null;
     state.heading = null;
     state.list = null;
     state.host = null;

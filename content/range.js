@@ -175,6 +175,9 @@
   let controlsStatus = null;
   let controlsError = null;
   let quickButtons = [];
+  let exportButton = null;
+  let exportError = null;
+  let exportState = { running: false, done: 0, total: 0, error: null };
   let rangeTooltip = null;
   let rangeTooltipState = {
     period: null,
@@ -468,13 +471,19 @@
     groupingSelect.addEventListener("change", changeGrouping);
     grouping.appendChild(selectWrap(groupingSelect));
 
-    customControls.append(fields, quickRanges, grouping);
+    exportButton = createElement("button", "aap-range-export-button", "Download JSON");
+    exportButton.type = "button";
+    exportButton.addEventListener("click", downloadRangeExport);
+
+    customControls.append(fields, quickRanges, grouping, exportButton);
 
     controlsError = createElement("span", "aap-range-input-error");
     const error = controlsError;
     error.hidden = true;
     controlsStatus = createElement("div", "aap-range-status");
-    selector.append(customControls, error, controlsStatus);
+    exportError = createElement("span", "aap-range-input-error");
+    exportError.hidden = true;
+    selector.append(customControls, error, exportError, controlsStatus);
     const controlParent = native.parentElement;
     if (controlParent) controlParent.insertBefore(selector, controlParent.firstElementChild);
     else native.insertAdjacentElement("beforebegin", selector);
@@ -583,6 +592,7 @@
       && (state.range.startDate || null) === (selectedRange.startDate || null)
       && (state.range.endDate || null) === (selectedRange.endDate || null)) return;
     state.range = selectedRange;
+    exportState.error = null;
     rangeInitialized = true;
     resetRangeData();
     storageSet({ [RANGE_KEY]: state.range });
@@ -607,6 +617,7 @@
     for (const { button, months } of quickButtons) {
       button.classList.toggle("aap-range-quick-button-active", rangesEqual(state.range, quickRange(months)));
     }
+    syncExportButton();
 
     if (controlsStatus) {
       if (!custom) controlsStatus.textContent = "";
@@ -617,6 +628,94 @@
       else controlsStatus.textContent = "";
     }
     if (controlsError && !custom) controlsError.hidden = true;
+  }
+
+  // ---- Analytics export ----------------------------------------------------
+  // Apify's Export button downloads one month. This fetches that same file for
+  // every month of the range and merges them into one download.
+  function syncExportButton() {
+    if (!exportButton) return;
+    const range = validRange(state.range) ? state.range : null;
+    exportButton.disabled = !range || exportState.running;
+    exportButton.textContent = exportState.running
+      ? `Preparing ${exportState.done}/${exportState.total}…`
+      : "Download JSON";
+    exportButton.title = range
+      ? `Download Apify's analytics export for ${rangeLabel(range)} as one JSON file`
+      : "Choose a range to download";
+    if (exportError) {
+      exportError.hidden = !exportState.error;
+      exportError.textContent = exportState.error || "";
+    }
+  }
+
+  function saveJson(data, name) {
+    const blob = new Blob([JSON.stringify(data)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = name;
+    link.hidden = true;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }
+
+  // "/actor-analytics/export -> HTTP 429" reads as "HTTP 429".
+  function exportFailureReason(error) {
+    return String(error?.message || "unknown error").replace(/^\/\S+ -> /, "");
+  }
+
+  async function downloadRangeExport() {
+    if (exportState.running || !validRange(state.range)) return;
+    const { start, end } = state.range;
+    const months = AAP_ANALYTICS_EXPORT.exportMonths(start, end);
+    const actorIds = [...state.actorIds];
+    exportState = { running: true, done: 0, total: months.length, error: null };
+    syncExportButton();
+    try {
+      await AAP_API.whenReady?.();
+      const scope = AAP_API.authScope?.();
+      // Apify's export leaves its marketing counts at 0; the monthly
+      // marketing statistics fill them in. A month whose statistics fail
+      // keeps Apify's value, and the file's notes say which.
+      const marketingTask = AAP_API.pooled(
+        months,
+        (month, _index, options) => AAP_API.acquisitionData(`${month}T00:00:00.000Z`, actorIds, options),
+      );
+      const results = await AAP_API.pooled(
+        months,
+        (month, _index, options) => AAP_API.analyticsExport(month, actorIds, options),
+        (done) => {
+          exportState.done = done;
+          syncExportButton();
+        },
+        // Apify answers one export at a time per account, as its own button
+        // asks for them; overlapping requests fail.
+        { concurrency: 1 },
+      );
+      const marketing = await marketingTask;
+      // The tab switched accounts while the months loaded.
+      if (AAP_API.authScope?.() !== scope) throw new Error("account changed");
+      if (results.failures.length) {
+        const failures = [...results.failures].sort((left, right) => left.index - right.index);
+        const failed = failures.map((failure) => monthLabel(failure.item.slice(0, 7)));
+        const reasons = [...new Set(failures.map((failure) => exportFailureReason(failure.error)))];
+        throw new Error(`${failed.join(", ")} could not be loaded (${reasons.join("; ")})`);
+      }
+      const merged = AAP_ANALYTICS_EXPORT.merge(months.map((month, index) => ({
+        month,
+        data: results[index],
+        marketing: marketing[index],
+      })));
+      saveJson(merged, AAP_ANALYTICS_EXPORT.fileName(start, end));
+      exportState = { running: false, done: 0, total: 0, error: null };
+    } catch (error) {
+      const reason = error?.message === "account changed" ? "The account changed during the download" : error?.message;
+      exportState = { running: false, done: 0, total: 0, error: `Download failed: ${reason || "try again"}.` };
+    }
+    syncExportButton();
   }
 
   function rangesEqual(left, right) {

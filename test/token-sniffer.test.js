@@ -102,6 +102,13 @@ vm.runInNewContext(fs.readFileSync("content/token-sniffer.js", "utf8"), context)
   const otherActorPath = events.find((event) => event.type === "aap-api-response" && event.detail.id === "x3");
   assert.equal(otherActorPath.detail.error, "Unsupported analytics request");
 
+  // The monthly analytics export may say not to download; other endpoints may not.
+  window.dispatchEvent(new SimpleCustomEvent("aap-api-request", { detail: { id: "x4", url: "https://console-backend.apify.com/actor-analytics/export?month=2026-10-01&shouldDownload=false" } }));
+  window.dispatchEvent(new SimpleCustomEvent("aap-api-request", { detail: { id: "x5", url: "https://console-backend.apify.com/actor-analytics/profit-margin?month=2026-10-01&shouldDownload=false" } }));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(events.find((event) => event.type === "aap-api-response" && event.detail.id === "x4").detail.error, undefined);
+  assert.equal(events.find((event) => event.type === "aap-api-response" && event.detail.id === "x5").detail.error, "Unsupported analytics request");
+
   // The Console's own analytics response is teed, and the Console still gets
   // an unconsumed body.
   const response = await window.fetch("https://console-backend.apify.com/actor-analytics/profit-margin?month=2026-10-01&actorIds=");
