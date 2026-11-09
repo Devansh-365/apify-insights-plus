@@ -180,7 +180,7 @@
 
   // ---- SPA route watcher ---------------------------------------------------
   let lastPath = null;
-  setInterval(() => {
+  AAP_LIFECYCLE.every(() => {
     const path = location.pathname;
     if (path === lastPath) return;
     lastPath = path;
@@ -393,7 +393,7 @@
   // the native canvas is hidden, load whichever month we've most recently
   // learned about if we haven't already, and otherwise just redraw.
   let loadedKey = null;
-  const poll = setInterval(() => {
+  const poll = AAP_LIFECYCLE.every(() => {
     syncOverlayPage();
     if (!onInsightsRoute()) return;
     // Custom mode has its own five-chart renderer and always represents all

@@ -1332,7 +1332,7 @@
   });
   window.dispatchEvent(new Event("aap-request-info"));
 
-  const poll = setInterval(() => {
+  const poll = AAP_LIFECYCLE.every(() => {
     syncPageTheme();
     const routeKey = `${location.pathname}|${location.search}`;
     if (routeKey !== lastRouteKey) lastRouteKey = routeKey;

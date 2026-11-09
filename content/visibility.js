@@ -315,6 +315,6 @@
 
   sync();
   self.AAP_FEATURES?.onChange(sync);
-  const poll = setInterval(sync, 500);
+  const poll = AAP_LIFECYCLE.every(sync, 500);
   window.addEventListener("beforeunload", () => clearInterval(poll));
 })();

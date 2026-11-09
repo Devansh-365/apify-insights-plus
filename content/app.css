@@ -21,7 +21,8 @@ body,
 .aap-profile-sorted-list,
 .aap-visibility-toggle,
 .aap-visibility-panel,
-.aap-portfolio {
+.aap-portfolio,
+.aap-boundary-notice {
   --aap-bg: var(--color-neutral-background, #ffffff);
   --aap-bg-muted: var(--color-neutral-background-muted, #f4f4f5);
   --aap-bg-subtle: var(--color-neutral-background-subtle, #ececee);
@@ -6409,4 +6410,59 @@ th[aria-sort="descending"] .aap-portfolio-sort {
 .aap-visibility-chip-was {
   color: var(--aap-warning-soft-text);
   background: var(--aap-warning-soft);
+}
+
+/* ---- Error notice (lib/error-boundary.js) -------------------------------
+   Shown once per page when Plus code fails, or after the extension updates
+   under an open tab. Sits above the page without covering Apify's own UI
+   controls in the top bar. */
+.aap-boundary-notice {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 2147483000;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: min(440px, calc(100vw - 32px));
+  padding: 10px 12px;
+  border: 1px solid var(--aap-popover-border);
+  border-radius: var(--aap-radius-lg);
+  background: var(--aap-popover-bg);
+  box-shadow: var(--aap-shadow-popover);
+  color: var(--aap-text);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.aap-boundary-notice-text {
+  flex: 1 1 auto;
+}
+
+.aap-boundary-notice-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
+.aap-boundary-notice-button {
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--aap-border);
+  border-radius: var(--aap-radius);
+  background: var(--aap-bg);
+  color: var(--aap-text);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 150ms ease;
+}
+
+.aap-boundary-notice-button:hover {
+  background: var(--aap-hover);
+}
+
+.aap-boundary-notice-button:focus-visible {
+  outline: 2px solid var(--aap-focus);
+  outline-offset: 1px;
 }

@@ -1,0 +1,42 @@
+name: Bug report
+description: A view is broken, shows wrong numbers, or slows down an Apify page.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Security problems (a token or data leaking) should not go here: see SECURITY.md.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what you saw instead.
+      placeholder: "On Monetization, I picked 6m and the chart stayed empty."
+    validations:
+      required: true
+  - type: input
+    id: page
+    attributes:
+      label: Page
+      description: Which Apify page? Remove anything you don't want public, such as an organization name.
+      placeholder: console.apify.com/actors/insights/monetization
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Extension version
+      description: Shown in the popup footer.
+      placeholder: v1.0.0
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics report
+      description: In the popup, open Settings → Diagnostics → Save report, then drag the file here. It contains no Apify data or token.
+  - type: textarea
+    id: screenshot
+    attributes:
+      label: Screenshot
+      description: Optional. Blur any revenue figures you'd rather keep private.

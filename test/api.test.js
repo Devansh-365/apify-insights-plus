@@ -129,6 +129,14 @@ window.dispatchEvent(new SimpleCustomEvent("aap-auth-scope", { detail: "account-
   }, null, { concurrency: 1 });
   assert.equal(mostRunning, 1, "pooled can run one item at a time");
 
+  // Page scripts can dispatch the response event too; malformed ones are
+  // ignored, and a waiting request still gets its real answer.
+  const realAnswer = context.self.AAP_API.analyticsExport("2026-03-01", []);
+  for (const detail of [null, "text", { id: 5 }, { id: "unknown", data: {} }]) {
+    window.dispatchEvent(new SimpleCustomEvent("aap-api-response", { detail }));
+  }
+  assert.deepEqual({ ...(await realAnswer) }, {}, "the real response still resolves the request");
+
   const range = await context.self.AAP_API.rangeData("2026-01-01", "2026-02-02", []);
   assert.equal(range.months.length, 2);
   assert.equal(requests.filter((url) => url.searchParams.has("actorIds")).length, 0, "rangeData must not fetch Actor detail rows");

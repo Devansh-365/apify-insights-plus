@@ -233,5 +233,72 @@
     if (area === "local" && changes[PERF_KEY]) renderPerf(changes[PERF_KEY].newValue);
   });
 
+  // ---- Diagnostics -----------------------------------------------------------
+  // A local file for bug reports. Nothing is sent anywhere; the user decides
+  // whether to attach it. Cached Apify data is counted, never included.
+  const ERRORS_KEY = "aap.errors";
+  const diagnosticsBody = document.getElementById("diagnostics-body");
+  const manifest = chrome.runtime.getManifest();
+  document.getElementById("version").textContent = `v${manifest.version}`;
+
+  async function renderErrorCount() {
+    const errors = (await chrome.storage.local.get(ERRORS_KEY))[ERRORS_KEY] || [];
+    diagnosticsBody.textContent = errors.length
+      ? `${errors.length} recent error${errors.length === 1 ? "" : "s"}, the latest ${new Date(errors.at(-1).at).toLocaleString()}.`
+      : "No extension errors recorded.";
+    document.getElementById("clear-errors").disabled = !errors.length;
+  }
+
+  document.getElementById("export-diagnostics").addEventListener("click", async () => {
+    const all = await chrome.storage.local.get(null);
+    const keys = Object.keys(all);
+    const report = {
+      extension: manifest.name,
+      version: manifest.version,
+      browser: navigator.userAgent,
+      exportedAt: new Date().toISOString(),
+      featuresOff: [...FEATURES.switchedOff(all[FEATURES.STORAGE_KEY])],
+      cachedEntries: CACHE_PREFIXES.reduce((counts, prefix) => ({ ...counts, [prefix]: keys.filter((key) => key.startsWith(prefix)).length }), {}),
+      performance: all[PERF_KEY] || null,
+      errors: all[ERRORS_KEY] || [],
+    };
+    const url = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2)], { type: "application/json" }));
+    const link = createElement("a");
+    link.href = url;
+    link.download = `insights-plus-diagnostics-${manifest.version}.json`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    status.textContent = "Diagnostics report saved";
+  });
+
+  document.getElementById("clear-errors").addEventListener("click", async () => {
+    await chrome.storage.local.remove(ERRORS_KEY);
+    status.textContent = "Error log cleared";
+  });
+
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === "local" && changes[ERRORS_KEY]) renderErrorCount();
+  });
+
+  // ---- Privacy policy changes -----------------------------------------------
+  // Bump PRIVACY_VERSION with PRIVACY.md's version whenever data practices
+  // change, so people who already installed the extension are told. A new
+  // install records the current version without a notice.
+  const PRIVACY_VERSION = "1.0";
+  const PRIVACY_SEEN_KEY = "aap.privacySeen";
+  const privacyNotice = document.getElementById("privacy-notice");
+  chrome.storage.local.get(PRIVACY_SEEN_KEY).then((result) => {
+    const seen = result[PRIVACY_SEEN_KEY];
+    if (seen == null) chrome.storage.local.set({ [PRIVACY_SEEN_KEY]: PRIVACY_VERSION });
+    else if (seen !== PRIVACY_VERSION) privacyNotice.hidden = false;
+  });
+  const markPrivacySeen = () => {
+    privacyNotice.hidden = true;
+    chrome.storage.local.set({ [PRIVACY_SEEN_KEY]: PRIVACY_VERSION });
+  };
+  document.getElementById("privacy-notice-dismiss").addEventListener("click", markPrivacySeen);
+  privacyNotice.querySelector("a").addEventListener("click", markPrivacySeen);
+
+  renderErrorCount();
   loadCacheSummary();
 })();

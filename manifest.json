@@ -1,8 +1,12 @@
 {
   "manifest_version": 3,
-  "name": "Apify Insights Plus",
-  "version": "0.0.1",
-  "description": "Adds ranged analytics, account-wide Actor quality, acquisition, debugging, and public Actor activity insights to Apify.",
+  "name": "Insights Plus for Apify",
+  "short_name": "Insights+",
+  "version": "1.0.0",
+  "description": "Date ranges, per-Actor breakdowns and account-wide tables for Apify Console Insights, plus run and user stats on Store pages.",
+  "author": "Devansh Tiwari",
+  "homepage_url": "https://github.com/Devansh-365/apify-insights-plus",
+  "minimum_chrome_version": "111",
   "permissions": [
     "storage"
   ],
@@ -12,7 +16,7 @@
     "128": "icons/icon128.png"
   },
   "action": {
-    "default_title": "Apify Insights Plus",
+    "default_title": "Insights Plus for Apify",
     "default_popup": "popup/popup.html",
     "default_icon": {
       "16": "icons/icon16.png",
@@ -33,11 +37,10 @@
     },
     {
       "matches": [
-        "https://console.apify.com/*",
-        "https://apify.com/*",
-        "https://www.apify.com/*"
+        "https://console.apify.com/*"
       ],
       "js": [
+        "lib/error-boundary.js",
         "lib/perf.js",
         "lib/context.js",
         "lib/features.js",
@@ -68,6 +71,32 @@
         "content/actor-detail.js",
         "content/profile-sort.js",
         "content/visibility.js",
+        "content/benchmark.js"
+      ],
+      "css": [
+        "content/app.css"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://apify.com/*",
+        "https://www.apify.com/*"
+      ],
+      "js": [
+        "lib/error-boundary.js",
+        "lib/perf.js",
+        "lib/context.js",
+        "lib/features.js",
+        "lib/local-store.js",
+        "lib/format.js",
+        "lib/actor-detail.js",
+        "lib/profile-sort.js",
+        "lib/benchmark.js",
+        "lib/api.js",
+        "lib/cache.js",
+        "content/actor-detail.js",
+        "content/profile-sort.js",
         "content/benchmark.js"
       ],
       "css": [

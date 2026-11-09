@@ -1104,7 +1104,7 @@
 
   // The Today switch applies to an open page; the poll handles the rest.
   self.AAP_FEATURES?.onChange(() => render());
-  const poll = setInterval(() => {
+  const poll = AAP_LIFECYCLE.every(() => {
     if (onOverviewRoute()) ensureHost();
     else removeHost();
   }, 400);

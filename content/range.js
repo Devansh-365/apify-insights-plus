@@ -2713,7 +2713,7 @@
     }, 0);
   }, true);
 
-  const poll = setInterval(() => {
+  const poll = AAP_LIFECYCLE.every(() => {
     const themeChanged = syncPageTheme();
     const active = onInsightsRoute();
     if (active !== lastActive) {

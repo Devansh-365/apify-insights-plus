@@ -60,6 +60,8 @@ function jsonResponse(body, headers = {}) {
 window.fetch = async (input, init) => {
   const url = typeof input === "string" ? input : input.url;
   pageFetches.push({ url, init });
+  if (url.includes("actor-breakdown?month=2026-07-01")) return new Response(JSON.stringify({ rows: "x".repeat(6 * 1024 * 1024) }));
+  if (url.includes("actor-breakdown?month=2026-06-01")) return jsonResponse({ rows: "x".repeat(900 * 1024) });
   if (url.includes("/actor-analytics/profit-margin")) return jsonResponse({ dailyProfitMarginStats: { "2026-10-01": 1 } }, { "cache-control": "no-cache" });
   return jsonResponse({ ok: true });
 };
@@ -145,6 +147,19 @@ vm.runInNewContext(fs.readFileSync("content/token-sniffer.js", "utf8"), context)
   assert.ok(xhrTees[1].detail.url.includes("user-count-statistics"));
   assert.equal(xhrTees[1].detail.data.which, "users", "the second response is filed under the second URL");
   assert.equal(xhr.listeners.length, 1, "one load listener per XHR object");
+
+  // Responses far larger than any analytics response are refused; large
+  // real ones (a month's export is ~155 KB) pass.
+  window.dispatchEvent(new SimpleCustomEvent("aap-api-request", { detail: { id: "x6", url: "https://console-backend.apify.com/actor-analytics/actor-breakdown?month=2026-07-01" } }));
+  window.dispatchEvent(new SimpleCustomEvent("aap-api-request", { detail: { id: "x7", url: "https://console-backend.apify.com/actor-analytics/actor-breakdown?month=2026-06-01" } }));
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  const oversized = events.find((event) => event.type === "aap-api-response" && event.detail.id === "x6");
+  assert.match(oversized.detail.error, /response too large/);
+  assert.equal(oversized.detail.data, undefined);
+  const large = events.find((event) => event.type === "aap-api-response" && event.detail.id === "x7");
+  assert.equal(large.detail.error, undefined);
+  assert.equal(large.detail.data.rows.length, 900 * 1024);
+  assert.equal(JSON.stringify(events.map((event) => event.detail)).includes("secret-token"), false, "the token still never appears in an event");
 
   finished = true;
   console.log("token sniffer tests passed");

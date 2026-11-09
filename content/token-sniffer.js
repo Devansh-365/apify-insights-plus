@@ -22,6 +22,9 @@
   const BACKEND_ORIGIN = "https://console-backend.apify.com";
   const MAX_REQUEST_ID_LENGTH = 128;
   const MAX_QUERY_LENGTH = 4096;
+  // The largest real response, a month's analytics export, is about 155 KB.
+  // Anything far beyond that is not an analytics response.
+  const MAX_RESPONSE_CHARS = 5 * 1024 * 1024;
   let lastInfo = null;
   let lastToken = null;
   let lastAuthScope = null;
@@ -164,7 +167,16 @@
           "x-idempotency-key": crypto.randomUUID(),
         },
       });
+      const declaredLength = Number(response.headers?.get?.("content-length"));
+      if (declaredLength > MAX_RESPONSE_CHARS) {
+        dispatchResponse(request.id, { error: `${url.pathname} -> response too large` });
+        return;
+      }
       const text = await response.text();
+      if (text.length > MAX_RESPONSE_CHARS) {
+        dispatchResponse(request.id, { error: `${url.pathname} -> response too large` });
+        return;
+      }
       let data;
       try {
         data = text ? JSON.parse(text) : null;

@@ -1,0 +1,22 @@
+name: Feature request
+description: Suggest a view or improvement for Apify developers.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to find out or do?
+      description: The question about your Actors you can't answer today, or the step that takes too long.
+      placeholder: "I want to know which Actors lost paying users this month."
+    validations:
+      required: true
+  - type: textarea
+    id: today
+    attributes:
+      label: How do you do it now?
+      placeholder: "I open each Actor's Insights and compare months by hand."
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help?
+      description: Optional. A rough idea or sketch is enough.

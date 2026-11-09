@@ -516,7 +516,7 @@
 
   sync();
   self.AAP_FEATURES?.onChange(sync);
-  const poll = setInterval(() => {
+  const poll = AAP_LIFECYCLE.every(() => {
     if (location.pathname !== lastPath) {
       lastPath = location.pathname;
       sync();
