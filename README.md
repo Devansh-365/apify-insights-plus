@@ -18,13 +18,13 @@
 </p>
 
 <p align="center">
-  <a href="#install"><strong>Install</strong></a> ·
+  <a href="#-install"><strong>Install</strong></a> ·
   <a href="PRIVACY.md"><strong>Privacy</strong></a> ·
   <a href="CHANGELOG.md"><strong>Changelog</strong></a> ·
   <a href="https://github.com/Devansh-365/apify-insights-plus/issues/new/choose"><strong>Report a bug</strong></a>
 </p>
 
-## What you get
+## ✨ What you get
 
 | Where | You get |
 |---|---|
@@ -38,20 +38,20 @@
 
 Every Insights page has an **Original / Plus** switch, and every feature can be turned off in the popup.
 
-## Install
+## ⚡ Install
 
 **Chrome Web Store:** [NEED: listing URL once published]
 
 **From source:** clone the repo, open `chrome://extensions`, turn on **Developer mode**, click **Load unpacked** and pick the folder. Then open [Console Insights](https://console.apify.com/actors/insights/monetization) and choose **Plus**. Needs Chrome 111+.
 
-## Good to know
+## 💡 Good to know
 
 - **Your token stays in the Console page.** A small page script makes a fixed list of read-only analytics requests with the session the Console already has. The rest of the extension never sees the token.
 - **Nothing leaves your browser** except requests to Apify and one public benchmark file. No analytics, no servers of our own. Details in [PRIVACY.md](PRIVACY.md).
 - **If Apify changes the Console**, a failing view falls back to Apify's original page. **Settings → Diagnostics → Save report** in the popup gives you a file to attach to a bug report.
 - **Rankings** come from a daily snapshot of public profile data, built by [a scheduled job](.github/workflows/refresh-builder-benchmark.yml) in this repo.
 
-## Development
+## 🛠️ Development
 
 No dependencies, no build step. Plain JavaScript in `content/` and `lib/`.
 
@@ -62,7 +62,7 @@ npm run release:check  # checks, tests, builds the zip and verifies its contents
 
 Code layout, release steps and the Console-change checklist are in [CONTRIBUTING.md](CONTRIBUTING.md). Security issues go through [SECURITY.md](SECURITY.md).
 
-## License
+## 📄 License
 
 [MIT](LICENSE), by Devansh Tiwari. Started as a fork of [apify-insights-plus](https://github.com/igolaizola/apify-insights-plus) by Iñigo Garcia Olaizola.
 

@@ -16,8 +16,13 @@
     --ink-2: #52525b;
     --ink-3: #a1a1aa;
     --line: #ececee;
-    --bar: #e9e9ec;
-    --accent: #2f5bea;
+    --blue: #246dff;
+    --green: #20a34e;
+    --orange: #f86606;
+    --blue-t: #dfe8ff;
+    --green-t: #d9f0e1;
+    --orange-t: #fee5d4;
+    --accent: var(--blue);
   }
   * { box-sizing: border-box; margin: 0; }
   html, body { width: 1200px; height: 360px; overflow: hidden; background: transparent; }
@@ -27,8 +32,9 @@
   .eyebrow { font-family: "Geist Mono", monospace; font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); }
 
   /* text */
-  .copy { position: absolute; left: 64px; top: 60px; width: 470px; }
-  .mark { display: flex; align-items: center; gap: 10px; }
+  .copy { position: absolute; left: 64px; top: 57px; width: 470px; }
+  .mark { display: flex; align-items: center; gap: 11px; }
+  .mark b { color: var(--ink); font-weight: 500; }
   .mark svg { display: block; }
   h1 { margin-top: 34px; font-size: 62px; font-weight: 500; letter-spacing: -0.04em; line-height: 1; }
   h1 em { font-style: normal; color: var(--ink-3); }
@@ -37,6 +43,7 @@
   .tags { display: flex; margin-top: 38px; font-family: "Geist Mono", monospace; font-size: 11.5px; color: var(--ink-2); }
   .tags span { padding: 0 14px; border-left: 1px solid var(--line); }
   .tags span:first-child { padding-left: 0; border-left: 0; }
+  .tags i { display: inline-block; width: 6px; height: 6px; border-radius: 2px; margin-right: 7px; vertical-align: 1px; }
 
   /* chart */
   .chart { position: absolute; left: 572px; top: 56px; width: 330px; }
@@ -46,16 +53,19 @@
   .seg span.on { color: var(--ink); background: #f4f4f5; }
   .big { margin-top: 12px; display: flex; align-items: baseline; gap: 10px; }
   .big .n { font-size: 36px; font-weight: 500; letter-spacing: -0.035em; }
-  .big .d { font-family: "Geist Mono", monospace; font-size: 12px; color: var(--accent); }
+  .big .d { font-family: "Geist Mono", monospace; font-size: 12px; color: var(--green); }
   .plot { position: relative; margin-top: 18px; height: 132px; }
   .plot svg { position: absolute; left: 0; bottom: 0; }
   .tip {
-    position: absolute; top: -6px; transform: translateX(-84%);
+    position: absolute; top: -20px;
     background: var(--ink); color: #fff; border-radius: 8px; padding: 6px 9px; white-space: nowrap;
     font-family: "Geist Mono", monospace; font-size: 10.5px; line-height: 1.45;
     box-shadow: 0 8px 18px -10px rgba(17,17,19,.5);
   }
-  .tip span { color: #a1a1aa; }
+  .tip .h { display: flex; justify-content: space-between; gap: 18px; color: #fff; margin-bottom: 3px; }
+  .tip .r { display: flex; justify-content: space-between; gap: 18px; color: #a1a1aa; }
+  .tip .r b { font-weight: 400; color: #e4e4e7; }
+  .tip i { display: inline-block; width: 6px; height: 6px; border-radius: 2px; margin-right: 6px; vertical-align: 1px; }
   .axis { display: flex; justify-content: space-between; margin-top: 8px; font-family: "Geist Mono", monospace; font-size: 10px; color: var(--ink-3); }
 
   /* ranks */
@@ -69,24 +79,23 @@
   .row.me::before { content: ""; position: absolute; left: -26px; top: 9px; bottom: 9px; width: 2px; background: var(--accent); border-radius: 2px; }
   .row.me .r { color: var(--accent); }
   .row.me .v { color: var(--ink); }
-  .move { margin-top: 14px; font-family: "Geist Mono", monospace; font-size: 10.5px; color: var(--accent); }
+  .move { margin-top: 14px; font-family: "Geist Mono", monospace; font-size: 10.5px; color: var(--green); }
 </style>
 </head>
 <body>
 <div class="frame">
   <div class="copy">
     <div class="mark">
-      <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true">
-        <rect x="0.5" y="0.5" width="21" height="21" rx="6" fill="#111113"/>
-        <rect x="5" y="12" width="2.6" height="5" rx="1" fill="#fff" opacity=".55"/>
-        <rect x="9.7" y="8.5" width="2.6" height="8.5" rx="1" fill="#fff" opacity=".8"/>
-        <rect x="14.4" y="5" width="2.6" height="12" rx="1" fill="#fff"/>
+      <svg width="26" height="26" viewBox="0 0 1080 1080" fill="none" aria-label="Apify">
+        <path d="M607.859 78.2218H987.785C995.513 78.2218 1001.78 84.4868 1001.78 92.2151V672.834C1001.78 686.742 983.69 692.134 976.075 680.496L596.15 99.877C590.06 90.5703 596.737 78.2218 607.859 78.2218Z" fill="#246DFF"/>
+        <path d="M472.141 78.2218H92.215C84.4867 78.2218 78.2217 84.4868 78.2217 92.2151V672.834C78.2217 686.742 96.3094 692.134 103.924 680.496L483.85 99.877C489.94 90.5703 483.263 78.2218 472.141 78.2218Z" fill="#20A34E"/>
+        <path d="M533.491 543.086L101.895 977.927C93.1302 986.758 99.3849 1001.78 111.826 1001.78H968.529C980.919 1001.78 987.197 986.863 978.535 978.003L553.429 543.161C547.969 537.576 538.993 537.542 533.491 543.086Z" fill="#F86606"/>
       </svg>
-      <span class="eyebrow">Chrome extension for Apify developers</span>
+      <span class="eyebrow">Chrome extension for <b>Apify</b></span>
     </div>
     <h1>Insights <em>Plus</em></h1>
     <p class="lede"><b>Every Actor's revenue, users and runs on one screen,</b> across any date range. Plus builder rankings and competitor stats.</p>
-    <div class="tags"><span>Date ranges</span><span>Per-Actor</span><span>Rankings</span><span>Competitors</span></div>
+    <div class="tags"><span><i style="background:var(--blue)"></i>Date ranges</span><span><i style="background:var(--green)"></i>Per-Actor</span><span><i style="background:var(--orange)"></i>Rankings</span><span><i style="background:var(--ink)"></i>Competitors</span></div>
   </div>
 
   <div class="chart">
@@ -94,7 +103,7 @@
     <div class="big"><span class="n">$8,942.60</span><span class="d">+12.4%</span></div>
     <div class="plot">
       <svg id="bars" width="330" height="104" viewBox="0 0 330 104"></svg>
-      <div class="tip" id="tip">Mar 10–16 &nbsp;$412.80<br><span>maps-scraper leads</span></div>
+      <div class="tip" id="tip"><div class="h"><span>Mar 10–16</span><span>$412.80</span></div><div class="r"><span><i style="background:var(--blue)"></i>maps-scraper</span><b>$188.20</b></div><div class="r"><span><i style="background:var(--green)"></i>jobs-feed</span><b>$121.40</b></div><div class="r"><span><i style="background:var(--orange)"></i>trend-tracker</span><b>$103.20</b></div></div>
     </div>
     <div class="axis"><span>Oct</span><span>Nov</span><span>Dec</span><span>Jan</span><span>Feb</span><span>Mar</span></div>
   </div>
@@ -113,24 +122,29 @@
 </div>
 
 <script>
+  // 26 weekly bars stacked by three Actors; the highlighted week is in full color.
   const svg = document.getElementById("bars"), ns = "http://www.w3.org/2000/svg";
   const W = 330, H = 104, n = 26, gap = 4, bw = (W - gap * (n - 1)) / n, hot = 23;
+  const css = getComputedStyle(document.documentElement), c = v => css.getPropertyValue(v).trim();
+  const full = [c("--blue"), c("--green"), c("--orange")], tint = [c("--blue-t"), c("--green-t"), c("--orange-t")];
   let seed = 11; const rnd = () => (seed = (seed * 9301 + 49297) % 233280) / 233280;
-  const css = getComputedStyle(document.documentElement);
+  const set = (el, a) => Object.entries(a).forEach(([k, v]) => el.setAttribute(k, v));
+  let hotX = 0;
   for (let i = 0; i < n; i++) {
-    const v = (0.34 + (i / n) * 0.5) * (0.8 + rnd() * 0.36) * (i === hot ? 1.4 : 1);
-    const h = Math.min(v, 1) * (H - 4), x = i * (bw + gap), r = document.createElementNS(ns, "rect");
-    Object.entries({ x, y: H - h, width: bw, height: h, rx: 2,
-      fill: i === hot ? css.getPropertyValue("--accent").trim() : css.getPropertyValue("--bar").trim() })
-      .forEach(([k, val]) => r.setAttribute(k, val));
-    svg.appendChild(r);
-    if (i === hot) {
-      document.getElementById("tip").style.left = (x + bw / 2) + "px";
-      document.getElementById("tip").style.top = (132 - h - 50) + "px";
-    }
+    const v = Math.min((0.34 + (i / n) * 0.5) * (0.8 + rnd() * 0.36) * (i === hot ? 1.55 : 0.86), 1);
+    const x = i * (bw + gap); let y = H;
+    [0.46, 0.3, 0.24].forEach((share, j) => {
+      const h = v * (H - 4) * share, r = document.createElementNS(ns, "rect");
+      y -= h;
+      set(r, { x, y: y + (j ? 0 : 0), width: bw, height: Math.max(h - 1.5, 1), rx: j === 2 ? 2 : 1, fill: (i === hot ? full : tint)[j] });
+      svg.appendChild(r);
+    });
+    if (i === hot) hotX = x;
   }
+  const tip = document.getElementById("tip");
+  tip.style.left = (hotX - tip.offsetWidth - 10) + "px";
   const base = document.createElementNS(ns, "line");
-  Object.entries({ x1: 0, x2: W, y1: H - 0.5, y2: H - 0.5, stroke: "#d4d4d8" }).forEach(([k, v]) => base.setAttribute(k, v));
+  set(base, { x1: 0, x2: W, y1: H - 0.5, y2: H - 0.5, stroke: "#d4d4d8" });
   svg.appendChild(base);
 </script>
 </body>
