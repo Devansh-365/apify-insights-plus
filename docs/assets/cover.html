@@ -1,0 +1,137 @@
+<!doctype html>
+<!-- Source for docs/assets/cover.png. Render at 1200x360, device scale 2:
+     "Google Chrome" --headless=new --hide-scrollbars --window-size=1200,360 \
+       --force-device-scale-factor=2 --virtual-time-budget=5000 \
+       --default-background-color=00000000 \
+       --screenshot=docs/assets/cover.png docs/assets/cover.html
+     All numbers and builder names are made up. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link href="https://api.fontshare.com/v2/css?f[]=satoshi@400,500,700&display=block" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500&display=block" rel="stylesheet">
+<style>
+  :root {
+    --ink: #111113;
+    --ink-2: #52525b;
+    --ink-3: #a1a1aa;
+    --line: #ececee;
+    --bar: #e9e9ec;
+    --accent: #2f5bea;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { width: 1200px; height: 360px; overflow: hidden; background: transparent; }
+  body { font-family: Satoshi, system-ui, sans-serif; color: var(--ink); -webkit-font-smoothing: antialiased; }
+  .mono { font-family: "Geist Mono", ui-monospace, monospace; }
+  .frame { position: absolute; inset: 0; border: 1px solid var(--line); border-radius: 24px; background: #fff; }
+  .eyebrow { font-family: "Geist Mono", monospace; font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); }
+
+  /* text */
+  .copy { position: absolute; left: 64px; top: 60px; width: 470px; }
+  .mark { display: flex; align-items: center; gap: 10px; }
+  .mark svg { display: block; }
+  h1 { margin-top: 34px; font-size: 62px; font-weight: 500; letter-spacing: -0.04em; line-height: 1; }
+  h1 em { font-style: normal; color: var(--ink-3); }
+  .lede { margin-top: 22px; text-wrap: pretty; font-size: 17.5px; line-height: 1.5; color: var(--ink-2); letter-spacing: -0.005em; }
+  .lede b { color: var(--ink); font-weight: 500; }
+  .tags { display: flex; margin-top: 38px; font-family: "Geist Mono", monospace; font-size: 11.5px; color: var(--ink-2); }
+  .tags span { padding: 0 14px; border-left: 1px solid var(--line); }
+  .tags span:first-child { padding-left: 0; border-left: 0; }
+
+  /* chart */
+  .chart { position: absolute; left: 572px; top: 56px; width: 330px; }
+  .chart .top { display: flex; justify-content: space-between; align-items: center; }
+  .seg { display: flex; font-family: "Geist Mono", monospace; font-size: 10.5px; color: var(--ink-3); gap: 2px; }
+  .seg span { padding: 3px 7px; border-radius: 6px; }
+  .seg span.on { color: var(--ink); background: #f4f4f5; }
+  .big { margin-top: 12px; display: flex; align-items: baseline; gap: 10px; }
+  .big .n { font-size: 36px; font-weight: 500; letter-spacing: -0.035em; }
+  .big .d { font-family: "Geist Mono", monospace; font-size: 12px; color: var(--accent); }
+  .plot { position: relative; margin-top: 18px; height: 132px; }
+  .plot svg { position: absolute; left: 0; bottom: 0; }
+  .tip {
+    position: absolute; top: -6px; transform: translateX(-84%);
+    background: var(--ink); color: #fff; border-radius: 8px; padding: 6px 9px; white-space: nowrap;
+    font-family: "Geist Mono", monospace; font-size: 10.5px; line-height: 1.45;
+    box-shadow: 0 8px 18px -10px rgba(17,17,19,.5);
+  }
+  .tip span { color: #a1a1aa; }
+  .axis { display: flex; justify-content: space-between; margin-top: 8px; font-family: "Geist Mono", monospace; font-size: 10px; color: var(--ink-3); }
+
+  /* ranks */
+  .ranks { position: absolute; left: 934px; top: 59px; width: 202px; padding-left: 26px; border-left: 1px solid var(--line); height: 248px; }
+  .rows { margin-top: 14px; }
+  .row { display: grid; grid-template-columns: 30px 1fr auto; align-items: center; height: 34px; font-size: 13px; color: var(--ink-2); border-top: 1px solid #f4f4f5; }
+  .row:first-child { border-top: 0; }
+  .row .r, .row .v { font-family: "Geist Mono", monospace; font-size: 11px; }
+  .row .r { color: var(--ink-3); }
+  .row.me { color: var(--ink); font-weight: 500; position: relative; }
+  .row.me::before { content: ""; position: absolute; left: -26px; top: 9px; bottom: 9px; width: 2px; background: var(--accent); border-radius: 2px; }
+  .row.me .r { color: var(--accent); }
+  .row.me .v { color: var(--ink); }
+  .move { margin-top: 14px; font-family: "Geist Mono", monospace; font-size: 10.5px; color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="frame">
+  <div class="copy">
+    <div class="mark">
+      <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true">
+        <rect x="0.5" y="0.5" width="21" height="21" rx="6" fill="#111113"/>
+        <rect x="5" y="12" width="2.6" height="5" rx="1" fill="#fff" opacity=".55"/>
+        <rect x="9.7" y="8.5" width="2.6" height="8.5" rx="1" fill="#fff" opacity=".8"/>
+        <rect x="14.4" y="5" width="2.6" height="12" rx="1" fill="#fff"/>
+      </svg>
+      <span class="eyebrow">Chrome extension for Apify developers</span>
+    </div>
+    <h1>Insights <em>Plus</em></h1>
+    <p class="lede"><b>Every Actor's revenue, users and runs on one screen,</b> across any date range. Plus builder rankings and competitor stats.</p>
+    <div class="tags"><span>Date ranges</span><span>Per-Actor</span><span>Rankings</span><span>Competitors</span></div>
+  </div>
+
+  <div class="chart">
+    <div class="top"><span class="eyebrow">Revenue, all Actors</span><div class="seg"><span>1M</span><span>3M</span><span class="on">6M</span><span>1Y</span></div></div>
+    <div class="big"><span class="n">$8,942.60</span><span class="d">+12.4%</span></div>
+    <div class="plot">
+      <svg id="bars" width="330" height="104" viewBox="0 0 330 104"></svg>
+      <div class="tip" id="tip">Mar 10–16 &nbsp;$412.80<br><span>maps-scraper leads</span></div>
+    </div>
+    <div class="axis"><span>Oct</span><span>Nov</span><span>Dec</span><span>Jan</span><span>Feb</span><span>Mar</span></div>
+  </div>
+
+  <div class="ranks">
+    <div class="eyebrow">Rank among builders</div>
+    <div class="rows">
+      <div class="row"><span class="r">36</span><span>lattice-labs</span><span class="v">14.2k</span></div>
+      <div class="row"><span class="r">37</span><span>orbitscrape</span><span class="v">13.9k</span></div>
+      <div class="row me"><span class="r">38</span><span>you</span><span class="v">13.1k</span></div>
+      <div class="row"><span class="r">39</span><span>fernway-data</span><span class="v">12.7k</span></div>
+      <div class="row"><span class="r">40</span><span>quillstack</span><span class="v">12.4k</span></div>
+    </div>
+    <div class="move">+4 places this month</div>
+  </div>
+</div>
+
+<script>
+  const svg = document.getElementById("bars"), ns = "http://www.w3.org/2000/svg";
+  const W = 330, H = 104, n = 26, gap = 4, bw = (W - gap * (n - 1)) / n, hot = 23;
+  let seed = 11; const rnd = () => (seed = (seed * 9301 + 49297) % 233280) / 233280;
+  const css = getComputedStyle(document.documentElement);
+  for (let i = 0; i < n; i++) {
+    const v = (0.34 + (i / n) * 0.5) * (0.8 + rnd() * 0.36) * (i === hot ? 1.4 : 1);
+    const h = Math.min(v, 1) * (H - 4), x = i * (bw + gap), r = document.createElementNS(ns, "rect");
+    Object.entries({ x, y: H - h, width: bw, height: h, rx: 2,
+      fill: i === hot ? css.getPropertyValue("--accent").trim() : css.getPropertyValue("--bar").trim() })
+      .forEach(([k, val]) => r.setAttribute(k, val));
+    svg.appendChild(r);
+    if (i === hot) {
+      document.getElementById("tip").style.left = (x + bw / 2) + "px";
+      document.getElementById("tip").style.top = (132 - h - 50) + "px";
+    }
+  }
+  const base = document.createElementNS(ns, "line");
+  Object.entries({ x1: 0, x2: W, y1: H - 0.5, y2: H - 0.5, stroke: "#d4d4d8" }).forEach(([k, v]) => base.setAttribute(k, v));
+  svg.appendChild(base);
+</script>
+</body>
+</html>
