@@ -26,15 +26,58 @@
 
 ## ✨ What you get
 
-| Where | You get |
-|---|---|
-| **Monetization** | Any range of months (or 1m, 3m, 6m, 1y), grouped by day, week or month. Click a day to see which Actors earned it. Export the range as one JSON file. |
-| **Actor portfolio** | Every Actor ranked by revenue, with month-over-month change. |
-| **Acquisition** | Users, referrers and countries for all Actors in one table, with the ones losing or gaining users called out. |
-| **Quality and runs** | Every Actor's quality score and suggested fixes, and the success rate of every Actor's runs. |
-| **Today** | The to-dos from Acquisition and Quality in one list. |
-| **Public Actor pages** | Active users and runs for the last 30 days, total runs and last run, on any Actor, yours or a competitor's. |
-| **Builder profiles** | Sort anyone's Actors by runs, monthly users or bookmarks, and see where that builder ranks among all public builders. |
+<sub>Console screenshots use a made-up demo account. Public pages show Apify's own profile and Actors.</sub>
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/01-monetization.png" alt="Monetization chart for Sep to Nov 2026, stacked by Actor, with the week of Nov 2 pinned and 17 Actors listed with revenue, cost, profit, runs and results."><br>
+      <b>Revenue for any date range</b><br>
+      <sub>Any months, grouped by day, week or month. Click a bar to see which Actors earned it, and export the range as JSON.</sub>
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/02-portfolio.png" alt="Actor portfolio: $8,875 revenue, 4 Actors needing action, 2 growing, and a table ranking Actors by revenue."><br>
+      <b>Every Actor ranked</b><br>
+      <sub>Revenue, profit, paying users, failed runs and pace against last month, with Actors to fix, reprice or promote flagged.</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/03-triage.png" alt="Acquisition triage: 7 Actors to act on, 2 leaking and 5 rising, with viewers, input page views, starts and start rate."><br>
+      <b>Find the Actors losing users</b><br>
+      <sub>Acquisition triage splits Actors into leaking, rising, fading and converting, with the viewers and start rate behind each call.</sub>
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/04-actor-insights.png" alt="Actor insights on Website Content Crawler: 14,258 active users, 3.8M runs in 30 days, 49M total runs and run outcomes."><br>
+      <b>Check any Actor on Apify Store</b><br>
+      <sub>Active users and runs for the last 30 days, total runs and how runs ended, on any Actor, yours or a competitor's.</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/05-profile-sort.png" alt="Apify's builder profile sorted by monthly users, with quick views and #1 rank tags next to total users, monthly users and runs."><br>
+      <b>See where any builder ranks</b><br>
+      <sub>Sort anyone's Actors by monthly users, runs or bookmarks, pick out the ones losing users, and see their rank among all builders.</sub>
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/06-quality.png" alt="Actor quality to-do list ranked by the revenue on each Actor."><br>
+      <b>Quality fixes</b><br>
+      <sub>Apify's quality suggestions for every Actor, ranked by the revenue on each one.</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/07-debugging.png" alt="Run success rate for every Actor with a daily trend, lowest first."><br>
+      <b>Run success</b><br>
+      <sub>Every Actor's run success rate with a daily trend, lowest first.</sub>
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/08-today.png" alt="Today list of listing fixes ranked by users and revenue at stake."><br>
+      <b>Today</b><br>
+      <sub>A short daily to-do list of listing fixes, ranked by the users and revenue at stake.</sub>
+    </td>
+  </tr>
+</table>
 
 Every Insights page has an **Original / Plus** switch, and every feature can be turned off in the popup.
 
@@ -56,8 +99,11 @@ Every Insights page has an **Original / Plus** switch, and every feature can be 
 No dependencies, no build step. Plain JavaScript in `content/` and `lib/`.
 
 ```sh
-npm test               # unit tests (Node 20+)
-npm run release:check  # checks, tests, builds the zip and verifies its contents
+# unit tests (Node 20+)
+npm test
+
+# test, build and verify the zip
+npm run release:check
 ```
 
 Code layout, release steps and the Console-change checklist are in [CONTRIBUTING.md](CONTRIBUTING.md). Security issues go through [SECURITY.md](SECURITY.md).
