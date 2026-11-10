@@ -11,14 +11,14 @@
 </p>
 
 <p align="center">
-  <img alt="Chrome extension, Manifest V3" src="https://img.shields.io/badge/Chrome-MV3-246dff?style=flat-square">
+  <a href="https://chromewebstore.google.com/detail/insights-plus-for-apify/hompbapnjiphobkegjlcijoanjapmnhc"><img alt="Chrome Web Store" src="https://img.shields.io/chrome-web-store/v/hompbapnjiphobkegjlcijoanjapmnhc?style=flat-square&label=Chrome%20Web%20Store&color=246dff"></a>
   <img alt="One permission: storage" src="https://img.shields.io/badge/permissions-storage%20only-1f9a4b?style=flat-square">
   <img alt="No tracking" src="https://img.shields.io/badge/tracking-none-e85d04?style=flat-square">
   <img alt="MIT license" src="https://img.shields.io/badge/license-MIT-1a1714?style=flat-square">
 </p>
 
 <p align="center">
-  <a href="#-install"><strong>Install</strong></a> ·
+  <a href="https://chromewebstore.google.com/detail/insights-plus-for-apify/hompbapnjiphobkegjlcijoanjapmnhc"><strong>Add to Chrome</strong></a> ·
   <a href="PRIVACY.md"><strong>Privacy</strong></a> ·
   <a href="CHANGELOG.md"><strong>Changelog</strong></a> ·
   <a href="https://github.com/Devansh-365/apify-insights-plus/issues/new/choose"><strong>Report a bug</strong></a>
@@ -83,7 +83,7 @@ Every Insights page has an **Original / Plus** switch, and every feature can be 
 
 ## ⚡ Install
 
-**Chrome Web Store:** [NEED: listing URL once published]
+**Chrome Web Store:** [Add Insights Plus for Apify to Chrome](https://chromewebstore.google.com/detail/insights-plus-for-apify/hompbapnjiphobkegjlcijoanjapmnhc). Then open [Console Insights](https://console.apify.com/actors/insights/monetization) and choose **Plus**.
 
 **From source:** clone the repo, open `chrome://extensions`, turn on **Developer mode**, click **Load unpacked** and pick the folder. Then open [Console Insights](https://console.apify.com/actors/insights/monetization) and choose **Plus**. Needs Chrome 111+.
 
