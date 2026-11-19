@@ -21,6 +21,7 @@ body,
 .aap-profile-sorted-list,
 .aap-visibility-toggle,
 .aap-visibility-panel,
+.aap-status-filter,
 .aap-portfolio,
 .aap-boundary-notice {
   --aap-bg: var(--color-neutral-background, #ffffff);
@@ -6586,7 +6587,206 @@ th[aria-sort="descending"] .aap-portfolio-sort {
   }
 }
 
-/* ---- My Actors: "Not public" filter -------------------------------------- */
+/* ---- My Actors: "Store status" filter ------------------------------------
+   The button copies the size and type of Apify's own filter buttons through
+   the --aap-status-filter-* variables set from their computed style. */
+.aap-status-filter {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  margin-left: 8px;
+}
+
+.aap-status-filter .aap-visibility-toggle {
+  gap: var(--aap-status-filter-gap, 8px);
+  height: var(--aap-status-filter-height, 40px);
+  margin-left: 0;
+  padding: 0 var(--aap-status-filter-padding-x, 12px);
+  box-sizing: border-box;
+  border-color: var(--aap-status-filter-border, var(--aap-field-border));
+  border-radius: var(--aap-status-filter-radius, var(--aap-radius-lg));
+  color: var(--aap-status-filter-color, var(--aap-text-muted));
+  background: var(--aap-status-filter-background, transparent);
+  font-family: var(--aap-status-filter-font-family, inherit);
+  font-size: var(--aap-status-filter-font-size, var(--aap-font-md));
+  font-weight: var(--aap-status-filter-font-weight, 600);
+  line-height: 1;
+}
+
+.aap-status-filter .aap-visibility-toggle:hover {
+  color: var(--aap-text);
+  background: var(--aap-hover);
+}
+
+.aap-status-filter .aap-visibility-toggle-active,
+.aap-status-filter .aap-visibility-toggle-active:hover {
+  border-color: var(--aap-accent);
+  color: var(--aap-accent-soft-text);
+  background: var(--aap-accent-soft);
+}
+
+.aap-status-filter-icon {
+  flex: none;
+  width: var(--aap-status-filter-icon-size, 1.15em);
+  height: var(--aap-status-filter-icon-size, 1.15em);
+}
+
+.aap-status-filter-count {
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  box-sizing: border-box;
+  border-radius: 10px;
+  color: var(--aap-on-accent);
+  background: var(--aap-accent);
+  font-size: var(--aap-font-xs);
+  font-weight: 600;
+  line-height: 20px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.aap-status-filter-count[hidden] {
+  display: none;
+}
+
+.aap-status-filter-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 50;
+  width: min(340px, calc(100vw - 32px));
+  padding: 6px;
+  box-sizing: border-box;
+  border: 1px solid var(--aap-popover-border);
+  border-radius: var(--aap-radius-lg);
+  color: var(--aap-text);
+  background: var(--aap-popover-bg);
+  box-shadow: var(--aap-shadow-popover);
+  font-size: var(--aap-font-base);
+  line-height: 18px;
+  animation: aap-tooltip-enter 140ms var(--aap-motion-standard, ease-out) both;
+}
+
+.aap-status-filter-menu[hidden] {
+  display: none;
+}
+
+.aap-status-filter-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border-radius: var(--aap-radius-sm);
+  cursor: pointer;
+}
+
+.aap-status-filter-option:hover {
+  background: var(--aap-hover);
+}
+
+.aap-status-filter-checkbox {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--aap-accent);
+  cursor: pointer;
+}
+
+.aap-status-filter-checkbox:focus-visible {
+  outline: 2px solid var(--aap-focus);
+  outline-offset: 2px;
+}
+
+.aap-status-filter-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.aap-status-filter-option-label {
+  font-weight: 500;
+}
+
+.aap-status-filter-hint {
+  color: var(--aap-text-subtle);
+  font-size: var(--aap-font-sm);
+}
+
+.aap-status-filter-option-count {
+  flex: none;
+  min-width: 24px;
+  color: var(--aap-text-subtle);
+  font-size: var(--aap-font-sm);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.aap-status-filter-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 4px;
+  padding: 8px 8px 2px;
+  border-top: 1px solid var(--aap-separator);
+  color: var(--aap-text-subtle);
+  font-size: var(--aap-font-sm);
+}
+
+.aap-status-filter-clear {
+  height: 26px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--aap-radius-sm);
+  color: var(--aap-accent-text);
+  background: transparent;
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.aap-status-filter-clear:hover:not(:disabled) {
+  background: var(--aap-hover);
+}
+
+.aap-status-filter-clear:focus-visible {
+  outline: 2px solid var(--aap-focus);
+  outline-offset: 1px;
+}
+
+.aap-status-filter-clear:disabled {
+  color: var(--aap-text-placeholder);
+  cursor: default;
+}
+
+.aap-visibility-chips {
+  display: inline-flex;
+  flex: none;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  max-width: 50%;
+}
+
+.aap-visibility-chip-warn {
+  color: var(--aap-warning-soft-text);
+  background: var(--aap-warning-soft);
+}
+
+.aap-visibility-chip-bad {
+  color: var(--aap-danger-soft-text);
+  background: var(--aap-danger-soft);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aap-status-filter-menu {
+    animation: none;
+  }
+}
+
 .aap-visibility-toggle {
   display: inline-flex;
   align-items: center;
@@ -6751,11 +6951,6 @@ th[aria-sort="descending"] .aap-portfolio-sort {
   white-space: nowrap;
 }
 
-.aap-visibility-chip-was {
-  color: var(--aap-warning-soft-text);
-  background: var(--aap-warning-soft);
-}
-
 /* ---- Error notice (lib/error-boundary.js) -------------------------------
    Shown once per page when Plus code fails, or after the extension updates
    under an open tab. Sits above the page without covering Apify's own UI
@@ -6809,4 +7004,8 @@ th[aria-sort="descending"] .aap-portfolio-sort {
 .aap-boundary-notice-button:focus-visible {
   outline: 2px solid var(--aap-focus);
   outline-offset: 1px;
+}
+
+.aap-status-filter-note {
+  min-width: 0;
 }

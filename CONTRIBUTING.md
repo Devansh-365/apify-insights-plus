@@ -72,7 +72,7 @@ Run this checklist before every release, and whenever a user reports a broken vi
 1. **Monetization:** the Plus chart appears, the 3m shortcut loads, clicking a day pins the Actor tooltip, and **Download JSON** saves a file.
 2. **Acquisition, Quality, Debugging:** each Plus view loads its table, and the **Original / Plus** switch goes back and forth.
 3. **Today and Portfolio:** both load without an error notice.
-4. **My Actors:** the Not public filter shows only private Actors.
+4. **My Actors:** each Store status option (Under maintenance, Deprecated) lists only matching Actors, and the menu counts match.
 5. **apify.com:** an Actor page shows the Actor insights panel, and a builder profile sorts by Runs.
 6. **Update under an open tab:** reload the extension in `chrome://extensions` with a Console tab open. The tab shows the "reload this page" notice and DevTools shows no new errors.
 7. **Popup:** Diagnostics shows "No extension errors recorded" after steps 1–5.
