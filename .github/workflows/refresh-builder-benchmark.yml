@@ -1,10 +1,8 @@
 name: Refresh Builder Benchmark
 
 on:
-  schedule:
-    # 09:17 Asia/Kolkata. GitHub may start scheduled jobs a few minutes late.
-    - cron: "17 3 * * *"
-      timezone: "Asia/Kolkata"
+  # Manual only. The daily refresh runs on GitLab CI:
+  # https://gitlab.com/Devansh-365/apify-insights-plus-benchmark
   workflow_dispatch:
 
 permissions:

@@ -92,7 +92,7 @@ Every Insights page has an **Original / Plus** switch, and every feature can be 
 - **Your token stays in the Console page.** A small page script makes a fixed list of read-only analytics requests with the session the Console already has. The rest of the extension never sees the token.
 - **Nothing leaves your browser** except requests to Apify and one public benchmark file. No analytics, no servers of our own. Details in [PRIVACY.md](PRIVACY.md).
 - **If Apify changes the Console**, a failing view falls back to Apify's original page. **Settings → Diagnostics → Save report** in the popup gives you a file to attach to a bug report.
-- **Rankings** come from a daily snapshot of public profile data, built by [a scheduled job](.github/workflows/refresh-builder-benchmark.yml) in this repo.
+- **Rankings** come from a daily snapshot of public profile data, built by [this script](scripts/refresh-builder-benchmark.js) on a daily GitLab CI schedule.
 
 ## 🛠️ Development
 
