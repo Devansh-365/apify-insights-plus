@@ -79,6 +79,9 @@
     observedMonth: null,
     actorIds: [],
     nativeActorIds: [],
+    // The Plus view's own Actor filter ([] = every Actor). Apify's picker is
+    // hidden in this view, so this replaces it; Original keeps Apify's.
+    customActorIds: [],
     range: null,
     grouping: "day",
     view: "custom",
@@ -111,6 +114,7 @@
     actorPrefetchKey = null;
     actorPrefetchRun++;
     adjacentPrefetched = false;
+    resetActorFilter();
     resetRangeData();
     if (state.view === "custom" && canLoad()) {
       renderRangeView();
@@ -177,6 +181,9 @@
   let quickButtons = [];
   let exportButton = null;
   let exportError = null;
+  let actorPicker = null;
+  // The Actors the picker offers, loaded once per account.
+  let actorOptions = { account: null, owned: [], loading: false, failed: false, run: 0 };
   let exportState = { running: false, done: 0, total: 0, error: null };
   let rangeTooltip = null;
   let rangeTooltipState = {
@@ -281,6 +288,91 @@
     state.actorIds = next;
     resetRangeData();
     return true;
+  }
+
+  // Plus draws the Actors chosen in its own picker; Original follows Apify's.
+  function viewActorIds(view = state.view) {
+    return view === "custom" ? state.customActorIds : state.nativeActorIds;
+  }
+
+  // ---- Actor filter ----------------------------------------------------------
+  function filterAccount() {
+    const org = (location.pathname.match(/^\/organization\/([^/]+)/) || [])[1] || "personal";
+    return `${AAP_API.authScope?.() || "anonymous"}|${org}`;
+  }
+
+  // Another account's Actor ids mean nothing here: start from every Actor.
+  function resetActorFilter() {
+    state.customActorIds = [];
+    actorOptions = { account: null, owned: [], loading: false, failed: false, run: actorOptions.run + 1 };
+    actorPicker?.setSelected([]);
+    actorPicker?.setActors([]);
+    if (actorPicker) loadActorOptions("background");
+  }
+
+  function syncFilterAccount() {
+    if (actorOptions.account && actorOptions.account !== filterAccount()) resetActorFilter();
+  }
+
+  // The owned list, plus any Actor the loaded range has data for (one since
+  // deleted, or one the owned list leaves out).
+  function pickerActors() {
+    const catalog = AAP_ACTOR_FILTER.normalize(catalogActors(state.rawData).map((actor) => ({ id: actor.actorId, title: actor.name })));
+    return AAP_ACTOR_FILTER.merge(actorOptions.owned, catalog);
+  }
+
+  function syncPickerActors() {
+    actorPicker?.setActors(pickerActors(), { loading: actorOptions.loading, failed: actorOptions.failed });
+  }
+
+  async function loadActorOptions(priority = "foreground") {
+    const account = filterAccount();
+    if (actorOptions.account === account && (actorOptions.loading || actorOptions.owned.length)) {
+      // A background load is in flight; a user waiting on the list wants it now.
+      if (actorOptions.loading && priority === "foreground") AAP_API.promote?.(`actor-filter-${actorOptions.run}`);
+      return;
+    }
+    const run = ++actorOptions.run;
+    actorOptions = { account, owned: [], loading: true, failed: false, run };
+    syncPickerActors();
+    try {
+      await AAP_API.whenReady?.();
+      const raw = await AAP_API.actorList({ priority, tag: `actor-filter-${run}` });
+      if (run !== actorOptions.run) return;
+      actorOptions.owned = AAP_ACTOR_FILTER.normalize(raw);
+      actorOptions.failed = false;
+    } catch {
+      if (run !== actorOptions.run) return;
+      actorOptions.failed = true;
+    }
+    actorOptions.loading = false;
+    syncPickerActors();
+  }
+
+  function onActorFilterChange(actorIds) {
+    state.customActorIds = AAP_ACTOR_FILTER.normalizeIds(actorIds);
+    exportState.error = null;
+    if (state.view !== "custom") return;
+    const previousTag = state.loadTag;
+    if (!setActorScope(state.customActorIds)) return;
+    // Drop the previous scope's queued requests; its snapshot stays cached,
+    // so switching back to it later paints at once.
+    AAP_API.cancel?.(previousTag);
+    if (rangeTooltipState.pinned) hideRangeTooltip();
+    renderRangeView();
+    loadRange();
+  }
+
+  function adoptNativeSelection() {
+    if (AAP_ACTOR_FILTER.sameIds(state.customActorIds, state.nativeActorIds)) return;
+    state.customActorIds = AAP_ACTOR_FILTER.normalizeIds(state.nativeActorIds);
+    actorPicker?.setSelected(state.customActorIds);
+  }
+
+  // Charts say which Actors they show whenever it is not every Actor.
+  function actorScopeNote() {
+    if (state.view !== "custom" || !state.customActorIds.length) return "";
+    return ` Showing ${AAP_ACTOR_FILTER.summary(state.customActorIds, pickerActors())} only.`;
   }
 
   function dataKey() {
@@ -475,6 +567,14 @@
     exportButton.type = "button";
     exportButton.addEventListener("click", downloadRangeExport);
 
+    if (self.AAP_ACTOR_PICKER) {
+      actorPicker?.destroy();
+      actorPicker = AAP_ACTOR_PICKER.create({ onChange: onActorFilterChange });
+      actorPicker.onOpen(() => loadActorOptions("foreground"));
+      actorPicker.setSelected(state.customActorIds);
+      syncPickerActors();
+      customControls.append(actorPicker.element);
+    }
     customControls.append(fields, quickRanges, grouping, exportButton);
 
     controlsError = createElement("span", "aap-range-input-error");
@@ -490,6 +590,8 @@
     populateMonthSelect(fromSelect);
     populateMonthSelect(toSelect);
     syncSelector();
+    // Load the list quietly so a single chosen Actor's name is ready.
+    if (actorPicker) loadActorOptions("background");
   }
 
   function monthSelect() {
@@ -608,6 +710,7 @@
     const custom = state.view === "custom";
     const customControls = selector.querySelector(".aap-range-custom-controls");
     if (customControls) customControls.hidden = !custom;
+    if (!custom) actorPicker?.close();
     const activeRange = validRange(state.range) ? state.range : defaultRange();
     ensureMonthOption(fromSelect, activeRange.start);
     ensureMonthOption(toSelect, activeRange.end);
@@ -760,7 +863,7 @@
     state.view = next;
     storageSet({ [VIEW_KEY]: next });
     document.documentElement.classList.toggle(ORIGINAL_MODE_CLASS, next === "original");
-    setActorScope(next === "custom" ? [] : state.nativeActorIds);
+    setActorScope(viewActorIds(next));
     if (next === "custom") {
       if (!validRange(state.range)) {
         state.range = defaultRange();
@@ -775,6 +878,58 @@
 
   function chartWrappers() {
     return [...document.querySelectorAll('[data-test="chart-wrapper"]')];
+  }
+
+  const NATIVE_EMPTY_SELECTOR = '[data-test="common-empty-state"]';
+
+  // Every chart to draw, as { wrapper, definition }. When Apify has no data
+  // for its own (hidden) selection it renders an empty state in place of the
+  // chart, sometimes without the chart wrapper; Plus still draws its range
+  // there, since its range and Actors can differ from Apify's month.
+  function chartSlots() {
+    const slots = [];
+    const drawn = new Set();
+    for (const wrapper of chartWrappers()) {
+      const definition = definitionFor(wrapper);
+      if (!definition || drawn.has(definition.key)) continue;
+      drawn.add(definition.key);
+      slots.push({ wrapper, definition });
+    }
+    for (const heading of document.querySelectorAll("h3")) {
+      const definition = CHART_DEFS.find((item) => item.heading === heading.textContent?.trim());
+      const section = heading.parentElement;
+      if (!definition || drawn.has(definition.key) || !section) continue;
+      const empty = section.querySelector(NATIVE_EMPTY_SELECTOR);
+      if (!empty) continue;
+      // The section's child holding the empty state stands in for the chart
+      // wrapper, so the heading lookups in definitionFor() still work.
+      let wrapper = empty;
+      while (wrapper.parentElement && wrapper.parentElement !== section) wrapper = wrapper.parentElement;
+      if (wrapper.parentElement !== section || wrapper === heading) continue;
+      drawn.add(definition.key);
+      slots.push({ wrapper, definition });
+    }
+    return slots;
+  }
+
+  // A chart box of Plus's own, placed where Apify shows its empty state.
+  function fallbackHost(wrapper, definition) {
+    const empty = wrapper.matches?.(NATIVE_EMPTY_SELECTOR) ? wrapper : wrapper.querySelector(NATIVE_EMPTY_SELECTOR);
+    let host = wrapper.querySelector(".aap-range-fallback-host");
+    if (!empty) return host;
+    if (!host || host.nextElementSibling !== empty) {
+      host?.remove();
+      host = createElement("div", "aap-range-fallback-host");
+      host.dataset.chart = definition.key;
+      empty.parentElement.insertBefore(host, empty);
+    }
+    empty.classList.add("aap-range-native-empty");
+    return host;
+  }
+
+  function removeFallbackHosts(root = document) {
+    root.querySelectorAll(".aap-range-fallback-host").forEach((element) => element.remove());
+    root.querySelectorAll(".aap-range-native-empty").forEach((element) => element.classList.remove("aap-range-native-empty"));
   }
 
   function definitionFor(wrapper) {
@@ -793,9 +948,20 @@
     return DEFAULT_MONEY_TAB;
   }
 
+  function nativeChartHost(wrapper, definition) {
+    return definition.key === "money"
+      ? wrapper.querySelector('[class*="PaidActorProfitMarginChart"]')
+      : wrapper.querySelector("canvas:not(.aap-range-chart):not(.aap-chart)")?.parentElement || null;
+  }
+
   function chartHost(wrapper, definition) {
-    if (definition.key === "money") return wrapper.querySelector('[class*="PaidActorProfitMarginChart"]');
-    return wrapper.querySelector("canvas")?.parentElement || null;
+    const native = nativeChartHost(wrapper, definition);
+    if (native) {
+      // Apify's chart is back (its data loaded): drop the stand-in box.
+      if (wrapper.querySelector(".aap-range-fallback-host")) removeFallbackHosts(wrapper);
+      return native;
+    }
+    return fallbackHost(wrapper, definition);
   }
 
   function rememberStyle(element, property) {
@@ -852,9 +1018,10 @@
 
   function restoreNativeView() {
     document.documentElement.classList.remove(MODE_CLASS);
+    removeFallbackHosts();
     for (const wrapper of chartWrappers()) {
       const definition = definitionFor(wrapper);
-      const host = definition && chartHost(wrapper, definition);
+      const host = definition && nativeChartHost(wrapper, definition);
       if (host) {
         for (const canvas of host.querySelectorAll("canvas:not(.aap-range-chart):not(.aap-chart)")) {
           canvas.style.visibility = "";
@@ -905,7 +1072,7 @@
         ? `Paying and free users each day for ${rangeLabel(state.range)}.`
         : `Average daily paying and free users per ${groupingLabel()} for ${rangeLabel(state.range)}.`,
     };
-    setRangeText(description, labels[definition.key]);
+    setRangeText(description, `${labels[definition.key]}${actorScopeNote()}`);
   }
 
   function formatCount(value) {
@@ -1990,9 +2157,7 @@
     // charts and table share Monetization's class names. Draw only here.
     if (!onInsightsRoute()) return;
     if (state.view !== "custom" || !validRange(state.range)) return;
-    for (const wrapper of chartWrappers()) {
-      const definition = definitionFor(wrapper);
-      if (!definition) continue;
+    for (const { wrapper, definition } of chartSlots()) {
       let chart;
       try {
         chart = ensureRangeChart(wrapper, definition);
@@ -2509,6 +2674,7 @@
     state.rawData = rawData;
     state.data = AAPR.group(rawData, state.grouping);
     state.data.actorDetails = details;
+    syncPickerActors();
   }
 
   // The last finished range is saved per account/range so a reload can paint
@@ -2663,7 +2829,11 @@
     const oldAccount = accountKey();
     state.observedMonth = month;
     state.nativeActorIds = [...(actorIds || [])].sort();
-    setActorScope(state.view === "custom" ? [] : state.nativeActorIds);
+    syncFilterAccount();
+    // What the user picks in Apify's own picker carries over to Plus. Plus
+    // hides that picker, so only Original can change it.
+    if (state.view === "original") adoptNativeSelection();
+    setActorScope(viewActorIds());
     if (oldAccount !== accountKey()) {
       resetRangeData();
     }
@@ -2720,6 +2890,8 @@
       lastActive = active;
       if (!active) {
         window.AAP_INSIGHTS_NAV?.removeViewToggle("monetization");
+        actorPicker?.destroy();
+        actorPicker = null;
         selector?.remove();
         selector = null;
         fromSelect = null;
